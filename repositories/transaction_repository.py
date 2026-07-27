@@ -15,7 +15,6 @@ class TransactionRepository:
     def add(self, transaction: TransactionModel) -> TransactionModel:
         """Agrega una operación."""
         self.session.add(transaction)
-        self.session.flush()
         return transaction
 
     def list_for_portfolio(self, portfolio_id: int) -> list[TransactionModel]:
@@ -26,4 +25,3 @@ class TransactionRepository:
             .order_by(TransactionModel.transaction_date, TransactionModel.id)
         )
         return list(self.session.scalars(statement))
-

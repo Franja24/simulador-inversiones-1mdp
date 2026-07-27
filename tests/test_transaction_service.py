@@ -1,6 +1,6 @@
 """Pruebas del registro de operaciones."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 
 from config.settings import Settings
 from database.models import TransactionType
+from domain.portfolio import PortfolioCreate
 from domain.transaction import TransactionCreate
+from repositories.transaction_repository import TransactionRepository
 from services.portfolio_service import PortfolioService
 from services.transaction_service import TransactionService
 from utils.validators import BusinessRuleError
@@ -157,3 +159,133 @@ def test_invalid_operation_does_not_change_cash(
     session.rollback()
     after = PortfolioService(session).get_required(portfolio_id).available_cash
     assert after == before
+
+
+def challenge_portfolio(session: Session, end_date: date | None = date(2026, 6, 30)) -> int:
+    """Crea un portafolio con periodo histórico controlado."""
+    return PortfolioService(session).create(
+        PortfolioCreate(
+            name="Reto con fechas",
+            initial_capital=Decimal("1000000"),
+            challenge_start_date=date(2026, 1, 1),
+            challenge_end_date=end_date,
+        )
+    ).id
+
+
+@pytest.mark.parametrize(
+    "transaction_date",
+    [
+        datetime(2026, 1, 1, 0, 0),
+        datetime(2026, 3, 15, 12, 0, tzinfo=UTC),
+        datetime(2026, 6, 30, 23, 59, tzinfo=UTC),
+    ],
+)
+def test_transaction_dates_inside_challenge_are_allowed(
+    session: Session, transaction_date: datetime
+) -> None:
+    target = challenge_portfolio(session)
+    data = operation(target, TransactionType.BUY, "1", "10").model_copy(
+        update={"transaction_date": transaction_date}
+    )
+    TransactionService(session).register(data)
+
+
+def test_transaction_before_challenge_is_rejected(session: Session) -> None:
+    target = challenge_portfolio(session)
+    data = operation(target, TransactionType.BUY, "1", "10").model_copy(
+        update={"transaction_date": datetime(2025, 12, 31, tzinfo=UTC)}
+    )
+    with pytest.raises(BusinessRuleError, match="anterior al inicio"):
+        TransactionService(session).register(data)
+
+
+def test_transaction_after_challenge_is_rejected(session: Session) -> None:
+    target = challenge_portfolio(session)
+    data = operation(target, TransactionType.BUY, "1", "10").model_copy(
+        update={"transaction_date": datetime(2026, 7, 1, tzinfo=UTC)}
+    )
+    with pytest.raises(BusinessRuleError, match="posterior al final"):
+        TransactionService(session).register(data)
+
+
+def test_future_transaction_is_rejected(session: Session, portfolio_id: int) -> None:
+    data = operation(portfolio_id, TransactionType.BUY, "1", "10").model_copy(
+        update={"transaction_date": datetime.now(UTC) + timedelta(days=1)}
+    )
+    with pytest.raises(BusinessRuleError, match="no puede ser futura"):
+        TransactionService(session).register(data)
+
+
+def test_portfolio_without_end_date_accepts_current_operation(
+    session: Session,
+) -> None:
+    target = challenge_portfolio(session, None)
+    data = operation(target, TransactionType.BUY, "1", "10")
+    TransactionService(session).register(data)
+
+
+def test_high_fees_affect_cash_and_cost_but_not_concentration(
+    session: Session, portfolio_id: int, settings: Settings
+) -> None:
+    data = operation(
+        portfolio_id,
+        TransactionType.BUY,
+        "49000",
+        "10",
+        commission="9000",
+    ).model_copy(update={"taxes": Decimal("1000")})
+    _, warnings = TransactionService(session, settings).register(data)
+    portfolio = PortfolioService(session).get_required(portfolio_id)
+    position = PortfolioService(session).calculate_positions(portfolio_id)[0]
+    assert warnings == []
+    assert portfolio.available_cash == Decimal("500000")
+    assert position.invested_amount == Decimal("500000")
+    assert position.average_purchase_price == Decimal("500000") / Decimal("49000")
+
+
+def test_commit_false_can_be_rolled_back(session: Session, portfolio_id: int) -> None:
+    service = TransactionService(session)
+    service.register(
+        operation(portfolio_id, TransactionType.BUY, "10", "10"), commit=False
+    )
+    assert len(TransactionRepository(session).list_for_portfolio(portfolio_id)) == 1
+    session.rollback()
+    assert TransactionRepository(session).list_for_portfolio(portfolio_id) == []
+    assert (
+        PortfolioService(session).get_required(portfolio_id).available_cash
+        == Decimal("1000000")
+    )
+
+
+def test_error_after_flush_rolls_back_when_committing(
+    session: Session,
+    portfolio_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = TransactionService(session)
+    original = service.portfolios.valuation
+    calls = 0
+
+    def fail_after_flush(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("fallo de recálculo")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service.portfolios, "valuation", fail_after_flush)
+    with pytest.raises(RuntimeError, match="fallo de recálculo"):
+        service.register(operation(portfolio_id, TransactionType.BUY, "10", "10"))
+    assert TransactionRepository(session).list_for_portfolio(portfolio_id) == []
+
+
+def test_current_value_is_consistent_after_commit(
+    session: Session, portfolio_id: int
+) -> None:
+    service = TransactionService(session)
+    service.register(operation(portfolio_id, TransactionType.BUY, "100", "10"))
+    portfolio = PortfolioService(session).get_required(portfolio_id)
+    assert portfolio.current_value == PortfolioService(session).valuation(portfolio_id)[
+        "total"
+    ]

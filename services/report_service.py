@@ -1,6 +1,6 @@
 """Generación de reportes Excel de la Fase 2."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 from config.settings import Settings, get_settings
 from repositories.price_repository import SqlPriceRepository
 from repositories.transaction_repository import TransactionRepository
+from services.audit_service import AuditService
 from services.portfolio_service import PortfolioService
+from utils.dates import is_stale_price
 
 
 class ReportService:
@@ -32,7 +34,11 @@ class ReportService:
         valuation = portfolio_service.valuation(portfolio_id, prices)
         positions = portfolio_service.calculate_positions(portfolio_id, prices)
         transactions = TransactionRepository(self.session).list_for_portfolio(portfolio_id)
-        price_history = prices.list_all()
+        symbols = {item.symbol for item in transactions} | {
+            item.symbol for item in positions
+        }
+        price_history = prices.list_for_symbols(symbols)
+        generated_at = datetime.now(UTC)
 
         workbook = Workbook()
         workbook.remove(workbook.active)
@@ -48,7 +54,7 @@ class ReportService:
             ("Ganancia realizada", valuation["realized"]),
             ("Ganancia no realizada", valuation["unrealized"]),
             ("Rendimiento", valuation["return_percentage"] / Decimal("100")),
-            ("Fecha de generación", datetime.now()),
+            ("Fecha de generación", generated_at.replace(tzinfo=None)),
         ]:
             summary.append([label, value])
 
@@ -134,28 +140,71 @@ class ReportService:
                 for item in price_history
             ],
         )
-        alerts = [
-            f"{item.symbol}: peso {item.portfolio_weight:.2f}%"
+        concentrated = [
+            item.symbol
             for item in positions
             if item.portfolio_weight
             > Decimal(str(self.settings.max_position_weight * 100))
         ]
+        missing_prices = [
+            item.symbol for item in positions if prices.get(item.symbol) is None
+        ]
+        stale_prices = [
+            item.symbol
+            for item in positions
+            if (
+                (last_update := prices.get_last_update_time(item.symbol)) is not None
+                and is_stale_price(last_update, generated_at)
+            )
+        ]
+        symbols_count = len(positions)
+        minimum_met = symbols_count >= self.settings.min_different_symbols
+        general_status = (
+            "CUMPLE"
+            if minimum_met
+            and not concentrated
+            and not missing_prices
+            and not stale_prices
+            else "INCUMPLE"
+        )
         self._table(
             workbook.create_sheet("Reglas"),
             ["Regla", "Valor"],
             [
                 ["Peso máximo", self.settings.max_position_weight],
                 ["Mínimo de emisoras", self.settings.min_different_symbols],
-                ["Alertas actuales", "; ".join(alerts) if alerts else "Sin alertas"],
+                ["Cantidad actual de emisoras", symbols_count],
+                ["Cumplimiento del mínimo", "CUMPLE" if minimum_met else "INCUMPLE"],
+                [
+                    "Posiciones sobreconcentradas",
+                    ", ".join(concentrated) if concentrated else "Ninguna",
+                ],
+                [
+                    "Precios faltantes",
+                    ", ".join(missing_prices) if missing_prices else "Ninguno",
+                ],
+                [
+                    "Precios desactualizados",
+                    ", ".join(stale_prices) if stale_prices else "Ninguno",
+                ],
+                ["Fecha de generación", generated_at],
+                ["Estado general", general_status],
             ],
         )
         self._format(workbook)
+        workbook["Reglas"]["B2"].number_format = "0.00%"
         destination = output_dir or Path("data/exports")
         destination.mkdir(parents=True, exist_ok=True)
         filename = f"reporte_reto_actinver_{datetime.now():%Y-%m-%d_%H-%M-%S}.xlsx"
         path = destination / filename
         workbook.save(path)
         load_workbook(path).close()
+        AuditService(self.session).record(
+            portfolio_id,
+            "REPORT_GENERATED",
+            {"filename": path.name, "sheets": len(self.SHEETS)},
+        )
+        self.session.commit()
         return path
 
     @staticmethod

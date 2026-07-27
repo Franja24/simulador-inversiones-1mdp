@@ -90,3 +90,15 @@ class SqlPriceRepository:
             ManualPriceModel.price_date.desc(), ManualPriceModel.id.desc()
         )
         return list(self.session.scalars(statement))
+
+    def list_for_symbols(self, symbols: set[str]) -> list[ManualPriceModel]:
+        """Lista precios únicamente para el conjunto normalizado indicado."""
+        normalized = {symbol.strip().upper() for symbol in symbols if symbol.strip()}
+        if not normalized:
+            return []
+        statement = (
+            select(ManualPriceModel)
+            .where(ManualPriceModel.symbol.in_(normalized))
+            .order_by(ManualPriceModel.price_date.desc(), ManualPriceModel.id.desc())
+        )
+        return list(self.session.scalars(statement))

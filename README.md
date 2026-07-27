@@ -103,12 +103,40 @@ existe y conserva `portfolios`, `transactions` y `audit_logs`. Este mecanismo es
 idempotente para tablas nuevas, pero no modifica columnas existentes; una fase
 posterior deberá incorporar Alembic para migraciones de esquema versionadas.
 
+## Reglas consolidadas de Fases 1 y 2
+
+- Las operaciones se validan en la capa de servicio contra las fechas de inicio y
+  fin del reto. También se rechazan fechas futuras, con normalización consistente
+  de timestamps con o sin zona horaria.
+- La concentración usa el valor de mercado actual más el valor bruto de los
+  títulos nuevos. Comisiones e impuestos afectan efectivo y costo contable, pero
+  no se agregan al valor de mercado para esta regla.
+- La valoración se recalcula después de un `flush` explícito. Cuando
+  `commit=False`, el caller conserva el control total del commit o rollback.
+- La antigüedad de precios considera lunes a viernes. Todavía no contempla los
+  días festivos oficiales de la Bolsa Mexicana de Valores.
+
 ## Importación y reportes
 
-La pantalla **Importar operaciones** ofrece plantillas CSV/XLSX, valida cada fila,
-señala posibles duplicados y guarda el lote en una sola transacción. Cualquier
-fallo revierte la importación completa. La pantalla **Reportes** genera el archivo
-en `data/exports/` y permite descargarlo.
+La pantalla **Importar operaciones** ofrece plantillas CSV/XLSX, valida cada fila
+y distingue duplicados contra la base de datos de duplicados dentro del archivo.
+Los duplicados requieren autorización explícita tanto en la interfaz como en
+`ImportService.execute(allow_duplicates=True)`. La simulación financiera se
+detiene tras el primer error de negocio, aunque se siguen recopilando errores de
+formato. Cualquier fallo de guardado revierte el lote completo.
+
+La pantalla **Reportes** genera el archivo en `data/exports/`, permite descargarlo,
+limita precios a emisoras del portafolio y presenta en la hoja `Reglas` el estado
+general de cumplimiento.
+
+## Comandos de calidad
+
+```bash
+pytest -v
+pytest --cov=services --cov=repositories --cov=providers --cov=utils --cov-report=term-missing
+ruff check .
+mypy config database domain repositories services providers ui utils
+```
 
 ## Limitaciones y próximos pasos
 
