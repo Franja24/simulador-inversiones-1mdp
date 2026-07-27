@@ -1,5 +1,6 @@
 """Descarga, inspección y exportación de históricos."""
 
+import hashlib
 from datetime import date, timedelta
 
 import plotly.graph_objects as go
@@ -19,10 +20,21 @@ def render(session: Session, provider: MarketProvider) -> None:
     start = c1.date_input("Fecha inicial", date.today() - timedelta(days=365))
     end = c2.date_input("Fecha final", date.today())
     history = HistoryService(session, provider)
+    force = st.checkbox("Forzar revisión de fechas ya consultadas")
     if st.button("Descargar o actualizar histórico"):
+        request_key = hashlib.sha256(
+            repr((symbol, start, end, force, provider.provider_name)).encode()
+        ).hexdigest()
+        if (
+            st.session_state.get("last_history_request") == request_key
+            and not force
+        ):
+            st.warning("Esta actualización ya fue solicitada en esta sesión.")
+            return
         try:
             with st.spinner("Sincronizando datos..."):
-                added = history.update_symbol(symbol, start, end)
+                added = history.update_symbol(symbol, start, end, force=force)
+            st.session_state["last_history_request"] = request_key
             st.success(f"Sincronización terminada: {added} registros nuevos.")
         except Exception as exc:
             st.error(f"No fue posible actualizar {symbol}: {exc}")
@@ -30,6 +42,10 @@ def render(session: Session, provider: MarketProvider) -> None:
     if frame.empty:
         st.info("No existe histórico local para el rango seleccionado.")
         return
+    st.caption(
+        f"Proveedor almacenado: {frame.iloc[-1]['provider']} · "
+        f"Última fecha: {frame.iloc[-1]['date']}"
+    )
     issues = DataQualityService().inspect(frame)
     for issue in issues:
         st.warning(f"{issue.message} Registros afectados: {issue.rows}")
@@ -61,6 +77,10 @@ def render(session: Session, provider: MarketProvider) -> None:
         ]
         st.subheader("Indicadores informativos")
         st.dataframe(indicators[selected].tail(20), use_container_width=True)
+        if len(selected) > 1 and indicators[selected[1:]].tail(1).isna().any(axis=None):
+            st.info(
+                "No hay suficientes observaciones para calcular todos los indicadores."
+            )
     st.subheader("Últimos registros")
     st.dataframe(frame.tail(20), use_container_width=True)
     st.download_button(

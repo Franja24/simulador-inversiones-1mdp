@@ -21,6 +21,7 @@ from services.data_quality_service import DataQualityService
 from services.history_service import HistoryService
 from services.indicator_service import IndicatorService
 from services.market_overview_service import MarketOverviewService
+from services.market_session_service import BMVSessionService
 from services.quant_score_service import QuantScoreInput, QuantScoreResult
 from services.simulation_service import SimulationInput, SimulationResult
 
@@ -140,7 +141,6 @@ def test_cache_provider_works_offline(session: Session) -> None:
     assert quote.price == data[-1].close
     assert quote.previous_close == data[0].close
     assert len(provider.get_history("AMXL.MX", data[0].date, data[-1].date)) == 2
-    assert provider.is_market_open() is False
     with pytest.raises(MarketProviderError):
         provider.get_quote("INVALID.MX")
 
@@ -220,11 +220,20 @@ def test_market_overview_open_and_closed(session: Session) -> None:
     repository.upsert_many(data)
     repository.save_sync("AMXL.MX", "mock", "OK", 2)
     session.commit()
+    def open_clock() -> datetime:
+        return datetime(2026, 1, 5, 16, tzinfo=UTC)
+
+    def closed_clock() -> datetime:
+        return datetime(2026, 1, 5, 23, tzinfo=UTC)
     open_summary = MarketOverviewService(
-        session, MockProvider({"AMXL.MX": data}, True)
+        session,
+        MockProvider({"AMXL.MX": data}, True),
+        BMVSessionService(clock=open_clock),
     ).summary()
     closed_summary = MarketOverviewService(
-        session, MockProvider({"AMXL.MX": data}, False)
+        session,
+        MockProvider({"AMXL.MX": data}, False),
+        BMVSessionService(clock=closed_clock),
     ).summary()
     assert open_summary["market_open"] is True
     assert closed_summary["market_open"] is False
@@ -286,11 +295,11 @@ def test_yahoo_provider_with_fake_client() -> None:
     assert history[0].timezone == "America/Mexico_City"
     assert provider.provider_version == "test"
     assert "BMV" in provider.supported_markets
-    assert len(provider.get_multiple_quotes(["AMXL", "WALMEX"])) == 2
+    assert len(provider.get_multiple_quotes(["AMXL", "WALMEX"]).successes) == 2
     assert len(
         provider.get_multiple_history(
             ["AMXL", "WALMEX"], date(2026, 1, 5), date(2026, 1, 6)
-        )
+        ).successes
     ) == 2
 
 
@@ -303,7 +312,6 @@ def test_yahoo_invalid_symbols_and_future_provider() -> None:
     with pytest.raises(MarketProviderError):
         provider.get_quote("INVALID")
     future = FutureProvider()
-    assert future.is_market_open() is False
     with pytest.raises(MarketProviderError):
         future.get_quote("AMXL.MX")
     with pytest.raises(MarketProviderError):

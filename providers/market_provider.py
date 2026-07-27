@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from datetime import date
 
-from domain.market import MarketBar, MarketQuote
+from domain.market import MarketBar, MarketBatchResult, MarketQuote
 
 
 class MarketProvider(ABC):
@@ -32,19 +32,27 @@ class MarketProvider(ABC):
     def get_history(self, symbol: str, start: date, end: date) -> list[MarketBar]:
         """Obtiene velas en un rango inclusivo."""
 
-    def get_multiple_quotes(self, symbols: list[str]) -> dict[str, MarketQuote]:
-        """Obtiene cotizaciones conservando errores por símbolo en el caller."""
-        return {symbol: self.get_quote(symbol) for symbol in symbols}
+    def get_multiple_quotes(self, symbols: list[str]) -> MarketBatchResult[MarketQuote]:
+        """Obtiene cotizaciones conservando éxitos parciales."""
+        result: MarketBatchResult[MarketQuote] = MarketBatchResult()
+        for symbol in dict.fromkeys(symbols):
+            try:
+                result.successes[symbol] = self.get_quote(symbol)
+            except Exception as exc:
+                result.errors[symbol] = type(exc).__name__
+        return result
 
     def get_multiple_history(
         self, symbols: list[str], start: date, end: date
-    ) -> dict[str, list[MarketBar]]:
-        """Obtiene históricos de múltiples emisoras."""
-        return {symbol: self.get_history(symbol, start, end) for symbol in symbols}
-
-    @abstractmethod
-    def is_market_open(self) -> bool:
-        """Indica si el mercado principal está abierto."""
+    ) -> MarketBatchResult[list[MarketBar]]:
+        """Obtiene históricos conservando éxitos parciales."""
+        result: MarketBatchResult[list[MarketBar]] = MarketBatchResult()
+        for symbol in dict.fromkeys(symbols):
+            try:
+                result.successes[symbol] = self.get_history(symbol, start, end)
+            except Exception as exc:
+                result.errors[symbol] = type(exc).__name__
+        return result
 
     def normalize_symbol(self, symbol: str) -> str:
         """Normaliza un símbolo según las reglas del proveedor."""

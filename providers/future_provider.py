@@ -26,6 +26,3 @@ class FutureProvider(MarketProvider):
 
     def get_history(self, symbol: str, start: date, end: date) -> list[MarketBar]:
         raise MarketProviderError(f"No hay proveedor futuro configurado para {symbol}.")
-
-    def is_market_open(self) -> bool:
-        return False

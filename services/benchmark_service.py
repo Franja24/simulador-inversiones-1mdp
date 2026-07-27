@@ -27,3 +27,21 @@ class BenchmarkService:
         if not frame.empty:
             frame["benchmark_return"] = frame["adj_close"].pct_change()
         return frame
+
+    def align_with_symbol(
+        self, benchmark_symbol: str, market_symbol: str
+    ) -> pd.DataFrame:
+        """Alinea benchmark y emisora únicamente en fechas compartidas."""
+        benchmark = self.load(benchmark_symbol)
+        market = self.history.load_history(market_symbol)
+        if benchmark.empty or market.empty:
+            return pd.DataFrame()
+        market = market[["date", "adj_close"]].rename(
+            columns={"adj_close": "market_close"}
+        )
+        benchmark = benchmark[
+            ["date", "adj_close", "benchmark_return"]
+        ].rename(columns={"adj_close": "benchmark_close"})
+        aligned = market.merge(benchmark, on="date", how="inner")
+        aligned["market_return"] = aligned["market_close"].pct_change()
+        return aligned

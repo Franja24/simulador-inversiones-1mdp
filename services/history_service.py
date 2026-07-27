@@ -7,29 +7,51 @@ from sqlalchemy.orm import Session
 
 from providers.market_provider import MarketProvider
 from repositories.market_history_repository import MarketHistoryRepository
+from services.market_calendar import MarketCalendar, WeekdayMarketCalendar
 
 
 class HistoryService:
     """Sincroniza proveedores externos con el cache SQLite."""
 
-    def __init__(self, session: Session, provider: MarketProvider) -> None:
+    def __init__(
+        self,
+        session: Session,
+        provider: MarketProvider,
+        calendar: MarketCalendar | None = None,
+    ) -> None:
         self.session = session
         self.provider = provider
         self.repository = MarketHistoryRepository(session)
+        self.calendar = calendar or WeekdayMarketCalendar()
 
-    def update_symbol(self, symbol: str, start: date, end: date) -> int:
+    def update_symbol(
+        self, symbol: str, start: date, end: date, *, force: bool = False
+    ) -> int:
         """Descarga solo intervalos con fechas hábiles ausentes."""
         normalized = self.provider.normalize_symbol(symbol)
-        missing = self.missing_dates(normalized, start, end)
+        missing = self.missing_dates(normalized, start, end, force=force)
         if not missing:
             return 0
         total = 0
         try:
             for range_start, range_end in self._contiguous_ranges(missing):
-                bars = self.provider.get_history(
+                received = self.provider.get_history(
                     normalized, range_start, range_end
                 )
+                expected = self.calendar.expected_sessions(range_start, range_end)
+                bars = [
+                    bar
+                    for bar in received
+                    if range_start <= bar.date <= range_end and bar.date in expected
+                ]
                 total += self.repository.upsert_many(bars)
+                returned_dates = {bar.date for bar in bars}
+                self.repository.mark_date_status(
+                    normalized,
+                    self.provider.provider_name,
+                    expected - returned_dates,
+                    "NO_DATA",
+                )
             self.repository.save_sync(
                 normalized, self.provider.provider_name, "OK", total
             )
@@ -48,13 +70,15 @@ class HistoryService:
             raise
 
     def update_all(
-        self, symbols: list[str], start: date, end: date
+        self, symbols: list[str], start: date, end: date, *, force: bool = False
     ) -> dict[str, int]:
         """Actualiza múltiples símbolos sin detenerse por un error aislado."""
         result: dict[str, int] = {}
         for symbol in symbols:
             try:
-                result[symbol] = self.update_symbol(symbol, start, end)
+                result[symbol] = self.update_symbol(
+                    symbol, start, end, force=force
+                )
             except Exception:
                 result[symbol] = 0
         return result
@@ -101,25 +125,34 @@ class HistoryService:
         """Obtiene la última sesión guardada."""
         return self.repository.last_date(symbol)
 
-    def missing_dates(self, symbol: str, start: date, end: date) -> list[date]:
+    def missing_dates(
+        self, symbol: str, start: date, end: date, *, force: bool = False
+    ) -> list[date]:
         """Detecta huecos de lunes a viernes.
 
         No descuenta todavía festivos bursátiles, por lo que estos pueden aparecer
         como huecos informativos.
         """
-        if end < start:
-            raise ValueError("La fecha final no puede ser anterior a la inicial.")
-        expected = {
-            timestamp.date()
-            for timestamp in pd.bdate_range(start=start, end=end)
-        }
-        return sorted(expected - self.repository.dates(symbol, start, end))
+        expected = self.calendar.expected_sessions(start, end)
+        stored = self.repository.dates(symbol, start, end)
+        known_no_data = (
+            set()
+            if force
+            else self.repository.known_no_data(
+                symbol, self.provider.provider_name, start, end
+            )
+        )
+        return sorted(expected - stored - known_no_data)
 
-    def refresh_if_needed(self, symbol: str, start: date, end: date) -> int:
+    def refresh_if_needed(
+        self, symbol: str, start: date, end: date, *, force: bool = False
+    ) -> int:
         """Actualiza únicamente si existe al menos una fecha hábil faltante."""
-        return self.update_symbol(symbol, start, end) if self.missing_dates(
-            symbol, start, end
-        ) else 0
+        return (
+            self.update_symbol(symbol, start, end, force=force)
+            if self.missing_dates(symbol, start, end, force=force)
+            else 0
+        )
 
     @staticmethod
     def _contiguous_ranges(dates: list[date]) -> list[tuple[date, date]]:

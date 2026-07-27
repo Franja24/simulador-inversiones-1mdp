@@ -1,11 +1,13 @@
 """Adaptador de Yahoo Finance mediante yfinance."""
 
-from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, date, datetime, time, timedelta
+import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
 
-from domain.market import MarketBar, MarketQuote
+import pandas as pd
+
+from domain.market import MarketBar, MarketBatchResult, MarketQuote
 from providers.market_provider import MarketProvider, MarketProviderError
 
 
@@ -22,7 +24,10 @@ def normalize_yahoo_symbol(symbol: str) -> str:
 class YahooProvider(MarketProvider):
     """Proveedor externo aislado del resto de la aplicación."""
 
-    def __init__(self, client: Any | None = None) -> None:
+    def __init__(self, client: Any | None = None, max_workers: int = 8) -> None:
+        if max_workers < 1:
+            raise ValueError("La concurrencia debe ser al menos uno.")
+        self.max_workers = max_workers
         if client is None:
             try:
                 import yfinance as yahoo_client
@@ -59,7 +64,7 @@ class YahooProvider(MarketProvider):
             raise MarketProviderError(
                 f"No fue posible obtener la cotización de {normalized}."
             ) from exc
-        if price <= 0:
+        if not math.isfinite(price) or price <= 0:
             raise MarketProviderError(f"Yahoo devolvió un precio inválido para {normalized}.")
         return MarketQuote(
             symbol=normalized,
@@ -74,11 +79,27 @@ class YahooProvider(MarketProvider):
     def normalize_symbol(self, symbol: str) -> str:
         return normalize_yahoo_symbol(symbol)
 
-    def get_multiple_quotes(self, symbols: list[str]) -> dict[str, MarketQuote]:
+    def get_multiple_quotes(
+        self, symbols: list[str]
+    ) -> MarketBatchResult[MarketQuote]:
         """Consulta múltiples símbolos en paralelo."""
-        with ThreadPoolExecutor(max_workers=min(8, max(1, len(symbols)))) as executor:
-            quotes = executor.map(self.get_quote, symbols)
-            return dict(zip(symbols, quotes, strict=True))
+        unique = list(dict.fromkeys(symbols))
+        result: MarketBatchResult[MarketQuote] = MarketBatchResult()
+        if not unique:
+            return result
+        with ThreadPoolExecutor(
+            max_workers=min(self.max_workers, len(unique))
+        ) as executor:
+            futures = {
+                executor.submit(self.get_quote, symbol): symbol for symbol in unique
+            }
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    result.successes[symbol] = future.result()
+                except Exception as exc:
+                    result.errors[symbol] = type(exc).__name__
+        return result
 
     def get_history(self, symbol: str, start: date, end: date) -> list[MarketBar]:
         normalized = normalize_yahoo_symbol(symbol)
@@ -98,9 +119,25 @@ class YahooProvider(MarketProvider):
             ) from exc
         if frame is None or frame.empty:
             raise MarketProviderError(f"No existen datos históricos para {normalized}.")
+        frame = self._normalize_columns(frame, normalized)
+        required = {"Open", "High", "Low", "Close"}
+        missing = required - set(frame.columns)
+        if missing:
+            raise MarketProviderError(
+                f"Yahoo no devolvió columnas requeridas para {normalized}: "
+                + ", ".join(sorted(missing))
+            )
         timezone = str(getattr(frame.index, "tz", "") or "America/Mexico_City")
         bars: list[MarketBar] = []
         for index, row in frame.iterrows():
+            required_values = [row["Open"], row["High"], row["Low"], row["Close"]]
+            if any(pd.isna(value) for value in required_values):
+                continue
+            adjusted = row.get("Adj Close", row["Close"])
+            if pd.isna(adjusted):
+                adjusted = row["Close"]
+            raw_volume = row.get("Volume", 0)
+            volume = 0 if pd.isna(raw_volume) else int(raw_volume)
             bars.append(
                 MarketBar(
                     symbol=normalized,
@@ -109,26 +146,60 @@ class YahooProvider(MarketProvider):
                     high=float(row["High"]),
                     low=float(row["Low"]),
                     close=float(row["Close"]),
-                    adj_close=float(row.get("Adj Close", row["Close"])),
-                    volume=int(row.get("Volume", 0)),
-                    dividends=float(row.get("Dividends", 0)),
-                    stock_splits=float(row.get("Stock Splits", 0)),
+                    adj_close=float(adjusted),
+                    volume=volume,
+                    dividends=self._optional_number(row.get("Dividends", 0)),
+                    stock_splits=self._optional_number(
+                        row.get("Stock Splits", 0)
+                    ),
                     timezone=timezone,
                     provider=self.provider_name,
                 )
+            )
+        if not bars:
+            raise MarketProviderError(
+                f"Yahoo no devolvió filas válidas para {normalized}."
             )
         return bars
 
     def get_multiple_history(
         self, symbols: list[str], start: date, end: date
-    ) -> dict[str, list[MarketBar]]:
+    ) -> MarketBatchResult[list[MarketBar]]:
         """Descarga varios históricos en paralelo."""
-        with ThreadPoolExecutor(max_workers=min(8, max(1, len(symbols)))) as executor:
-            histories = executor.map(
-                lambda symbol: self.get_history(symbol, start, end), symbols
-            )
-            return dict(zip(symbols, histories, strict=True))
+        unique = list(dict.fromkeys(symbols))
+        result: MarketBatchResult[list[MarketBar]] = MarketBatchResult()
+        if not unique:
+            return result
+        with ThreadPoolExecutor(
+            max_workers=min(self.max_workers, len(unique))
+        ) as executor:
+            futures = {
+                executor.submit(self.get_history, symbol, start, end): symbol
+                for symbol in unique
+            }
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    result.successes[symbol] = future.result()
+                except Exception as exc:
+                    result.errors[symbol] = type(exc).__name__
+        return result
 
-    def is_market_open(self) -> bool:
-        now = datetime.now(ZoneInfo("America/Mexico_City"))
-        return now.weekday() < 5 and time(8, 30) <= now.time() <= time(15, 0)
+    @staticmethod
+    def _normalize_columns(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        if not isinstance(frame.columns, pd.MultiIndex):
+            return frame
+        for level in range(frame.columns.nlevels):
+            if symbol in frame.columns.get_level_values(level):
+                return frame.xs(symbol, axis=1, level=level)
+        if len(set(frame.columns.get_level_values(-1))) == 1:
+            normalized = frame.copy()
+            normalized.columns = normalized.columns.droplevel(-1)
+            return normalized
+        raise MarketProviderError(
+            f"No fue posible interpretar columnas múltiples para {symbol}."
+        )
+
+    @staticmethod
+    def _optional_number(value: object) -> float:
+        return 0.0 if pd.isna(value) else float(str(value))

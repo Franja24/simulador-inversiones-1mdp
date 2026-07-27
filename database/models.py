@@ -143,6 +143,9 @@ class IndicatorCacheModel(Base):
     __tablename__ = "indicator_cache"
     symbol: Mapped[str] = mapped_column(String(30), primary_key=True)
     last_history_date: Mapped[date] = mapped_column(Date)
+    history_row_count: Mapped[int] = mapped_column(Integer, default=0)
+    history_version: Mapped[str] = mapped_column(String(64), default="")
+    indicator_version: Mapped[str] = mapped_column(String(20), default="1")
     payload: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -161,3 +164,22 @@ class MarketSyncLogModel(Base):
     rows_added: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class MarketDateStatusModel(Base):
+    """Fecha consultada sin datos o confirmada como no operativa."""
+
+    __tablename__ = "market_date_status"
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol", "date", "provider", name="uq_market_date_status_symbol_date"
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(30), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    status: Mapped[str] = mapped_column(String(30))
+    checked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )

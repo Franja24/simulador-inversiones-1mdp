@@ -24,7 +24,7 @@ Actinver, con capital inicial predeterminado de $1,000,000 MXN.
 - Plantillas descargables de importación.
 - Reportes Excel con resumen, posiciones, operaciones, precios y reglas.
 - Históricos OHLCV persistentes y disponibles sin conexión después de descargarse.
-- Actualización incremental y detección de huecos en el cache local.
+- Actualización incremental, detección de huecos y registro persistente `NO_DATA`.
 - Proveedores desacoplados para Yahoo Finance, cache y extensiones futuras.
 - Indicadores técnicos informativos con cache persistente.
 - Benchmark configurable, dashboard de mercado y explorador de históricos.
@@ -126,12 +126,19 @@ precio ajustado, volumen, dividendos, splits y timezone.
 
 1. `HistoryService.missing_dates()` compara el rango solicitado con SQLite.
 2. Solo se solicitan al proveedor los intervalos hábiles ausentes.
-3. `MarketHistoryRepository` evita duplicados por símbolo y fecha.
-4. Los datos sobreviven al reiniciar y `CacheProvider` permite consultarlos sin red.
-5. Cada sincronización exitosa o fallida queda registrada de forma compacta.
+3. Una sesión esperada sin observación se marca `NO_DATA` para evitar consultas
+   repetidas. La actualización forzada vuelve a consultar esas fechas.
+4. `MarketHistoryRepository` evita duplicados por símbolo y fecha, actualiza
+   correcciones OHLCV y rechaza barras imposibles antes de persistirlas.
+5. Los datos sobreviven al reiniciar y `CacheProvider` permite consultarlos sin red.
+6. Cada sincronización exitosa o fallida queda registrada de forma compacta.
 
-Los huecos consideran lunes a viernes; todavía pueden señalar como faltantes los
-festivos de la BMV.
+El calendario base considera lunes a viernes y acepta exclusiones configurables.
+No incluye todavía un calendario oficial de festivos de la BMV.
+
+Las consultas múltiples devuelven éxitos y errores por símbolo, sin descartar un
+lote completo por una emisora inválida. Yahoo se consulta con concurrencia
+acotada y sus respuestas se normalizan antes de entrar al dominio.
 
 ## Indicadores
 
@@ -139,7 +146,9 @@ festivos de la BMV.
 MACD/señal/histograma, ATR, Bandas de Bollinger, ADX, ROC, momentum, retornos,
 volatilidad móvil, volumen relativo y niveles de 52 semanas. Son datos
 informativos: no generan recomendaciones ni predicciones. El resultado se
-reutiliza mientras no cambie la última fecha histórica.
+reutiliza solo si coinciden última fecha, cantidad de filas, firma del histórico
+y versión del algoritmo. RSI, ATR y ADX usan el suavizado de Wilder; una
+corrección en precio o volumen invalida el cache aunque la última fecha no cambie.
 
 ## Benchmark
 
@@ -165,8 +174,17 @@ de datos y exportar CSV.
 
 Al iniciar, SQLAlchemy ejecuta `create_all`: agrega la tabla `manual_prices` si no
 existe y conserva `portfolios`, `transactions` y `audit_logs`. Este mecanismo es
-idempotente para tablas nuevas, pero no modifica columnas existentes; una fase
+idempotente para tablas nuevas. El inicializador también aplica de forma
+idempotente las columnas de firma y versión del cache de indicadores; una fase
 posterior deberá incorporar Alembic para migraciones de esquema versionadas.
+
+## Sesión BMV y precisión monetaria
+
+El estado abierto/cerrado usa la zona `America/Mexico_City` y horario configurable
+de 08:30 a 15:00. Es una estimación: no contempla festivos ni cierres
+extraordinarios. Los históricos e indicadores se calculan como `float`; al cruzar
+al dominio contable, `market_price_to_decimal()` convierte desde la representación
+decimal del precio para mantener importes y cantidades en `Decimal`.
 
 ## Reglas consolidadas de Fases 1 y 2
 

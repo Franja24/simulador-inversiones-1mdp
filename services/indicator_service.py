@@ -14,26 +14,47 @@ from repositories.market_history_repository import (
 class IndicatorService:
     """Calcula indicadores sin producir recomendaciones ni predicciones."""
 
-    def __init__(self, session: Session) -> None:
+    INDICATOR_VERSION = "2.0-wilder"
+
+    def __init__(
+        self, session: Session, indicator_version: str | None = None
+    ) -> None:
         self.session = session
         self.history = MarketHistoryRepository(session)
         self.cache = IndicatorCacheRepository(session)
+        self.indicator_version = indicator_version or self.INDICATOR_VERSION
 
     def calculate(self, symbol: str, *, force: bool = False) -> pd.DataFrame:
         """Calcula o reutiliza cache cuando el histórico no cambió."""
         normalized = symbol.strip().upper()
-        last_date = self.history.last_date(normalized)
+        last_date, row_count, history_version = self.history.history_signature(
+            normalized
+        )
         if last_date is None:
             return pd.DataFrame()
         cached = self.cache.get(normalized)
-        if cached is not None and cached.last_history_date == last_date and not force:
+        if (
+            cached is not None
+            and cached.last_history_date == last_date
+            and cached.history_row_count == row_count
+            and cached.history_version == history_version
+            and cached.indicator_version == self.indicator_version
+            and not force
+        ):
             frame = pd.read_json(StringIO(cached.payload), orient="split")
             frame["date"] = pd.to_datetime(frame["date"]).dt.date
             return frame
         frame = self._history_frame(normalized)
         calculated = self._calculate_frame(frame)
         payload = calculated.to_json(orient="split", date_format="iso")
-        self.cache.save(normalized, last_date, payload)
+        self.cache.save(
+            normalized,
+            last_date,
+            row_count,
+            history_version,
+            self.indicator_version,
+            payload,
+        )
         self.session.commit()
         return calculated
 
@@ -68,10 +89,19 @@ class IndicatorService:
             result[f"ema_{span}"] = close.ewm(span=span, adjust=False).mean()
 
         delta = close.diff()
-        gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
-        loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
-        relative_strength = gain / loss.replace(0, float("nan"))
-        result["rsi_14"] = 100 - (100 / (1 + relative_strength))
+        average_gain = IndicatorService._wilder_average(delta.clip(lower=0), 14)
+        average_loss = IndicatorService._wilder_average(-delta.clip(upper=0), 14)
+        rsi = pd.Series(float("nan"), index=result.index, dtype=float)
+        gain_only = (average_gain > 0) & (average_loss == 0)
+        loss_only = (average_gain == 0) & (average_loss > 0)
+        unchanged = (average_gain == 0) & (average_loss == 0)
+        regular = (average_gain > 0) & (average_loss > 0)
+        rsi.loc[gain_only] = 100
+        rsi.loc[loss_only] = 0
+        rsi.loc[unchanged] = 50
+        relative_strength = average_gain.loc[regular] / average_loss.loc[regular]
+        rsi.loc[regular] = 100 - (100 / (1 + relative_strength))
+        result["rsi_14"] = rsi
 
         ema_12 = close.ewm(span=12, adjust=False).mean()
         ema_26 = close.ewm(span=26, adjust=False).mean()
@@ -88,7 +118,7 @@ class IndicatorService:
             ],
             axis=1,
         ).max(axis=1)
-        result["atr_14"] = true_range.ewm(alpha=1 / 14, adjust=False).mean()
+        result["atr_14"] = IndicatorService._wilder_average(true_range, 14)
 
         middle = close.rolling(20).mean()
         deviation = close.rolling(20).std()
@@ -100,14 +130,19 @@ class IndicatorService:
         down_move = -low.diff()
         plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
         minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
-        atr = result["atr_14"].replace(0, float("nan"))
-        plus_di = 100 * plus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr
-        minus_di = 100 * minus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr
-        result["adx_14"] = (
-            100
-            * (plus_di - minus_di).abs()
-            / (plus_di + minus_di).replace(0, float("nan"))
-        ).ewm(alpha=1 / 14, adjust=False).mean()
+        atr = result["atr_14"]
+        plus_smoothed = IndicatorService._wilder_average(plus_dm, 14)
+        minus_smoothed = IndicatorService._wilder_average(minus_dm, 14)
+        plus_di = 100 * plus_smoothed / atr.replace(0, float("nan"))
+        minus_di = 100 * minus_smoothed / atr.replace(0, float("nan"))
+        denominator = plus_di + minus_di
+        dx = 100 * (plus_di - minus_di).abs() / denominator.replace(
+            0, float("nan")
+        )
+        dx.loc[denominator == 0] = 0
+        result["plus_di_14"] = plus_di.fillna(0)
+        result["minus_di_14"] = minus_di.fillna(0)
+        result["adx_14"] = IndicatorService._wilder_average(dx, 14)
 
         result["roc_10"] = close.pct_change(10) * 100
         result["momentum_10"] = close - close.shift(10)
@@ -123,4 +158,24 @@ class IndicatorService:
         result["low_52_week"] = low.rolling(252, min_periods=1).min()
         result["distance_to_high"] = close / result["high_52_week"] - 1
         result["distance_to_low"] = close / result["low_52_week"] - 1
+        return result
+
+    @staticmethod
+    def _wilder_average(series: pd.Series, period: int) -> pd.Series:
+        """Promedio de Wilder sin rellenar observaciones insuficientes."""
+        values = series.astype(float)
+        result = pd.Series(float("nan"), index=values.index, dtype=float)
+        valid_positions = [position for position, value in enumerate(values) if pd.notna(value)]
+        if len(valid_positions) < period:
+            return result
+        seed_positions = valid_positions[:period]
+        seed_position = seed_positions[-1]
+        previous = float(values.iloc[seed_positions].mean())
+        result.iloc[seed_position] = previous
+        for position in range(seed_position + 1, len(values)):
+            current = values.iloc[position]
+            if pd.isna(current):
+                continue
+            previous = ((previous * (period - 1)) + float(current)) / period
+            result.iloc[position] = previous
         return result

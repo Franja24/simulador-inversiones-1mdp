@@ -59,6 +59,3 @@ class CacheProvider(MarketProvider):
             )
             for item in self.repository.list_history(symbol, start, end)
         ]
-
-    def is_market_open(self) -> bool:
-        return False
