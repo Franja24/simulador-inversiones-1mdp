@@ -1,6 +1,6 @@
 """Validación e importación atómica de operaciones CSV y Excel."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from database.models import TransactionType
 from domain.transaction import TransactionCreate
 from repositories.transaction_repository import TransactionRepository
+from services.audit_service import AuditService
 from services.portfolio_service import PortfolioService
 from services.transaction_service import TransactionService
 from utils.validators import BusinessRuleError
@@ -39,7 +40,16 @@ class ImportPreview:
 
     rows: list[TransactionCreate]
     errors: list[str]
-    duplicate_rows: list[int]
+    database_duplicate_rows: list[int] = field(default_factory=list)
+    file_duplicate_rows: list[int] = field(default_factory=list)
+    simulation_complete: bool = True
+    simulation_stopped_at_row: int | None = None
+    not_simulated_rows: list[int] = field(default_factory=list)
+
+    @property
+    def has_duplicates(self) -> bool:
+        """Indica si existe cualquier clase de duplicado."""
+        return bool(self.database_duplicate_rows or self.file_duplicate_rows)
 
 
 class ImportService:
@@ -58,59 +68,100 @@ class ImportService:
         raise ValueError("Solo se admiten archivos CSV y XLSX.")
 
     def validate(self, frame: pd.DataFrame, portfolio_id: int) -> ImportPreview:
-        """Valida columnas, filas, duplicados y efecto secuencial."""
+        """Valida todas las filas y simula hasta el primer error de negocio.
+
+        Los errores de formato se siguen recopilando en todo el archivo. Después
+        del primer error de negocio, las filas con formato válido se marcan como
+        no simuladas para evitar resultados financieros derivados engañosos.
+        """
         missing = [column for column in EXPECTED_COLUMNS if column not in frame.columns]
         if missing:
             raise ValueError(f"Faltan columnas obligatorias: {', '.join(missing)}")
 
-        existing = self._existing_keys(portfolio_id)
+        database_keys = self._existing_keys(portfolio_id)
+        file_keys: set[tuple[object, ...]] = set()
         rows: list[TransactionCreate] = []
         errors: list[str] = []
-        duplicates: list[int] = []
+        database_duplicates: list[int] = []
+        file_duplicates: list[int] = []
+        not_simulated: list[int] = []
+        simulation_active = True
+        stopped_at: int | None = None
         portfolio = PortfolioService(self.session).get_required(portfolio_id)
         cash = portfolio.available_cash
         quantities = {
             item.symbol: item.total_quantity
             for item in PortfolioService(self.session).calculate_positions(portfolio_id)
         }
+        transaction_service = TransactionService(self.session)
 
         for index, raw in frame.iterrows():
             row_number = int(index) + 2
             try:
                 data = self._to_schema(raw, portfolio_id)
-                total = data.quantity * data.price
-                fees = data.commission + data.taxes
-                if data.transaction_type == TransactionType.BUY:
-                    cost = total + fees
-                    if cost > cash:
-                        raise BusinessRuleError("efectivo insuficiente")
-                    cash -= cost
-                    quantities[data.symbol] = quantities.get(
-                        data.symbol, Decimal("0")
-                    ) + data.quantity
-                else:
-                    available = quantities.get(data.symbol, Decimal("0"))
-                    if data.quantity > available:
-                        raise BusinessRuleError("títulos insuficientes")
-                    cash += total - fees
-                    quantities[data.symbol] = available - data.quantity
-                if self._key(data) in existing:
-                    duplicates.append(row_number)
+                key = self._key(data)
+                if key in database_keys:
+                    database_duplicates.append(row_number)
+                if key in file_keys:
+                    file_duplicates.append(row_number)
+                file_keys.add(key)
                 rows.append(data)
+                transaction_service.validate_transaction_date(data, portfolio)
+                if not simulation_active:
+                    not_simulated.append(row_number)
+                    continue
+                cash, quantities = self._simulate_row(data, cash, quantities)
             except (ValidationError, ValueError, TypeError, BusinessRuleError) as exc:
                 errors.append(f"Fila {row_number}: {exc}")
-        return ImportPreview(rows, errors, duplicates)
+                if isinstance(exc, BusinessRuleError) and simulation_active:
+                    simulation_active = False
+                    stopped_at = row_number
+        return ImportPreview(
+            rows=rows,
+            errors=errors,
+            database_duplicate_rows=database_duplicates,
+            file_duplicate_rows=file_duplicates,
+            simulation_complete=simulation_active,
+            simulation_stopped_at_row=stopped_at,
+            not_simulated_rows=not_simulated,
+        )
 
-    def execute(self, preview: ImportPreview) -> int:
+    def execute(
+        self, preview: ImportPreview, *, allow_duplicates: bool = False
+    ) -> int:
         """Guarda todo el lote o revierte cada cambio si algo falla."""
-        if preview.errors:
+        portfolio_id = preview.rows[0].portfolio_id if preview.rows else None
+        if preview.errors or not preview.simulation_complete:
+            self._audit_rejection(portfolio_id, "validation_errors")
             raise BusinessRuleError("La importación contiene filas inválidas.")
+        if preview.has_duplicates and not allow_duplicates:
+            self._audit_rejection(portfolio_id, "duplicates_not_authorized")
+            raise BusinessRuleError(
+                "La importación contiene duplicados sin autorización explícita."
+            )
         try:
             for row in preview.rows:
                 TransactionService(self.session).register(row, commit=False)
+            AuditService(self.session).record(
+                portfolio_id,
+                "IMPORT_BATCH_WITH_DUPLICATES"
+                if preview.has_duplicates
+                else "IMPORT_BATCH",
+                {
+                    "rows": len(preview.rows),
+                    "database_duplicates": len(preview.database_duplicate_rows),
+                    "file_duplicates": len(preview.file_duplicate_rows),
+                },
+            )
             self.session.commit()
-        except Exception:
+        except Exception as exc:
             self.session.rollback()
+            AuditService(self.session).record(
+                portfolio_id,
+                "IMPORT_ERROR",
+                {"rows": len(preview.rows), "error_type": type(exc).__name__},
+            )
+            self.session.commit()
             raise
         return len(preview.rows)
 
@@ -127,6 +178,35 @@ class ImportService:
                 writer, index=False, sheet_name="Operaciones"
             )
         return output.getvalue()
+
+    def _audit_rejection(self, portfolio_id: int | None, reason: str) -> None:
+        AuditService(self.session).record(
+            portfolio_id, "IMPORT_REJECTED", {"reason": reason}
+        )
+        self.session.commit()
+
+    @staticmethod
+    def _simulate_row(
+        data: TransactionCreate,
+        cash: Decimal,
+        quantities: dict[str, Decimal],
+    ) -> tuple[Decimal, dict[str, Decimal]]:
+        updated = quantities.copy()
+        gross = data.quantity * data.price
+        fees = data.commission + data.taxes
+        if data.transaction_type == TransactionType.BUY:
+            cost = gross + fees
+            if cost > cash:
+                raise BusinessRuleError("Efectivo insuficiente en la simulación.")
+            cash -= cost
+            updated[data.symbol] = updated.get(data.symbol, Decimal("0")) + data.quantity
+        else:
+            available = updated.get(data.symbol, Decimal("0"))
+            if data.quantity > available:
+                raise BusinessRuleError("Títulos insuficientes en la simulación.")
+            cash += gross - fees
+            updated[data.symbol] = available - data.quantity
+        return cash, updated
 
     def _existing_keys(self, portfolio_id: int) -> set[tuple[object, ...]]:
         return {

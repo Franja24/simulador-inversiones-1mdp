@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from providers.manual_price_provider import ManualPriceProvider
 from repositories.price_repository import SqlPriceRepository
+from services.audit_service import AuditService
 
 
 class MarketDataService:
@@ -27,6 +28,11 @@ class MarketDataService:
         """Guarda y confirma un precio manual."""
         try:
             self.provider.save_price(symbol, price, price_date, notes)
+            AuditService(self.session).record(
+                None,
+                "MANUAL_PRICE_CREATED",
+                {"symbol": symbol.strip().upper(), "provider": "manual"},
+            )
             self.session.commit()
         except Exception:
             self.session.rollback()

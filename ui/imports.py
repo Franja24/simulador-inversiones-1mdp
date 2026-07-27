@@ -1,5 +1,7 @@
 """Flujo de importación de operaciones."""
 
+import hashlib
+
 import streamlit as st
 from sqlalchemy.orm import Session
 
@@ -22,29 +24,54 @@ def render(session: Session, portfolio_id: int) -> None:
     uploaded = st.file_uploader("Selecciona un archivo", type=["csv", "xlsx"])
     if uploaded is None:
         return
+    content = uploaded.getvalue()
+    file_key = hashlib.sha256(content).hexdigest()
     try:
-        frame = service.read_file(uploaded.getvalue(), uploaded.name)
+        frame = service.read_file(content, uploaded.name)
         preview = service.validate(frame, portfolio_id)
-    except ValueError as exc:
+    except Exception as exc:
         st.error(str(exc))
         return
     st.subheader("Vista previa")
     st.dataframe(frame, use_container_width=True)
     for error in preview.errors:
         st.error(error)
-    if preview.duplicate_rows:
+    if preview.database_duplicate_rows:
         st.warning(
-            "Posibles duplicados en filas: "
-            + ", ".join(str(row) for row in preview.duplicate_rows)
+            "Duplicados contra la base en filas: "
+            + ", ".join(str(row) for row in preview.database_duplicate_rows)
         )
-    confirm_duplicates = not preview.duplicate_rows or st.checkbox(
+    if preview.file_duplicate_rows:
+        st.warning(
+            "Duplicados dentro del archivo en filas: "
+            + ", ".join(str(row) for row in preview.file_duplicate_rows)
+        )
+    if not preview.simulation_complete:
+        st.warning(
+            "La simulación financiera se detuvo en la fila "
+            f"{preview.simulation_stopped_at_row}; filas posteriores no fueron simuladas."
+        )
+    confirm_duplicates = not preview.has_duplicates or st.checkbox(
         "Confirmo que deseo importar los posibles duplicados"
     )
     confirmed = st.checkbox("Confirmo la importación completa")
-    if st.button("Importar operaciones", disabled=bool(preview.errors)):
+    already_imported = st.session_state.get("last_import_key") == file_key
+    if already_imported:
+        st.info("Este archivo ya fue importado en esta sesión.")
+    if st.button(
+        "Importar operaciones",
+        disabled=bool(preview.errors) or already_imported,
+    ):
         if not confirmed or not confirm_duplicates:
             st.warning("Confirma la importación y los posibles duplicados.")
             return
-        count = service.execute(preview)
-        st.success(f"Se importaron {count} operaciones.")
+        try:
+            count = service.execute(
+                preview, allow_duplicates=confirm_duplicates
+            )
+            st.session_state["last_import_key"] = file_key
+            st.success(f"Se importaron {count} operaciones.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"No se pudo completar la importación: {exc}")
 

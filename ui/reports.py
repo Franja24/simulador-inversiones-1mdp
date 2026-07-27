@@ -10,13 +10,17 @@ def render(session: Session, portfolio_id: int) -> None:
     """Genera el archivo bajo demanda."""
     st.info("El reporte se guarda en data/exports y también puede descargarse.")
     if st.button("Generar reporte Excel"):
-        with st.spinner("Generando reporte..."):
-            path = ReportService(session).generate(portfolio_id)
-        st.success(f"Reporte generado: {path.name}")
-        st.download_button(
-            "Descargar reporte",
-            path.read_bytes(),
-            path.name,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        try:
+            with st.spinner("Generando reporte..."):
+                path = ReportService(session).generate(portfolio_id)
+            st.success(f"Reporte generado: {path.name}")
+            st.download_button(
+                "Descargar reporte",
+                path.read_bytes(),
+                path.name,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except Exception as exc:
+            session.rollback()
+            st.error(f"No se pudo generar el reporte: {exc}")
 

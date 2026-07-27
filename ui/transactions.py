@@ -1,5 +1,6 @@
 """Registro e historial filtrable de operaciones."""
 
+import hashlib
 from datetime import datetime
 from decimal import Decimal
 
@@ -34,6 +35,27 @@ def render_new(session: Session, portfolio_id: int) -> None:
             if not confirmed:
                 st.warning("Confirma la operación antes de guardarla.")
                 return
+            operation_key = hashlib.sha256(
+                repr(
+                    (
+                        portfolio_id,
+                        kind.value,
+                        symbol.strip().upper(),
+                        quantity,
+                        price,
+                        commission,
+                        taxes,
+                        strategy,
+                        reason,
+                        stop_loss,
+                        take_profit,
+                        notes,
+                    )
+                ).encode()
+            ).hexdigest()
+            if st.session_state.get("last_transaction_key") == operation_key:
+                st.warning("Esta operación ya fue enviada en esta sesión.")
+                return
             try:
                 _, warnings = TransactionService(session).register(
                     TransactionCreate(
@@ -54,6 +76,7 @@ def render_new(session: Session, portfolio_id: int) -> None:
                     )
                 )
                 st.success("Operación registrada.")
+                st.session_state["last_transaction_key"] = operation_key
                 for warning in warnings:
                     st.warning(warning)
             except (BusinessRuleError, ValueError) as exc:

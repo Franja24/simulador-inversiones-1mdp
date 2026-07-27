@@ -3,9 +3,11 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from database.models import TransactionType
+from database.models import AuditLogModel, ManualPriceModel, TransactionType
 from repositories.price_repository import SqlPriceRepository
 from services.market_data_service import MarketDataService
 from services.portfolio_service import PortfolioService
@@ -48,3 +50,33 @@ def test_valuation_uses_persistent_manual_price(
     )
     assert valuation["total"] == Decimal("1000200")
     assert valuation["unrealized"] == Decimal("200")
+
+
+def test_manual_price_is_audited(session: Session) -> None:
+    MarketDataService(session).save_price(
+        "AMXL.MX", Decimal("10"), datetime.now(UTC)
+    )
+    actions = list(session.scalars(select(AuditLogModel.action)))
+    assert "MANUAL_PRICE_CREATED" in actions
+
+
+def test_manual_price_error_rolls_back(
+    session: Session, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    service = MarketDataService(session)
+
+    def fail(*args, **kwargs):  # type: ignore[no-untyped-def]
+        service.session.add(
+            ManualPriceModel(
+                symbol="ERROR.MX",
+                price=Decimal("1"),
+                price_date=datetime.now(UTC),
+                provider="manual",
+            )
+        )
+        raise RuntimeError("fallo simulado")
+
+    monkeypatch.setattr(service.provider, "save_price", fail)
+    with pytest.raises(RuntimeError, match="fallo simulado"):
+        service.save_price("ERROR.MX", Decimal("1"), datetime.now(UTC))
+    assert SqlPriceRepository(session).get("ERROR.MX") is None
