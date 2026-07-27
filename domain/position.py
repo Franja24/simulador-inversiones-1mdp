@@ -22,4 +22,4 @@ class Position(BaseModel):
     stop_loss: Decimal | None
     take_profit: Decimal | None
     last_updated: datetime
-
+    last_price_date: datetime | None = None

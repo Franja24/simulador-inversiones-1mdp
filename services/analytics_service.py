@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from repositories.price_repository import PriceRepository
+from repositories.price_repository import PriceSource
 from services.portfolio_service import PortfolioService
 
 
@@ -15,8 +15,7 @@ class AnalyticsService:
         self.portfolios = PortfolioService(session)
 
     def summary(
-        self, portfolio_id: int, prices: PriceRepository | None = None
+        self, portfolio_id: int, prices: PriceSource | None = None
     ) -> dict[str, Decimal]:
         """Devuelve métricas de valoración."""
         return self.portfolios.valuation(portfolio_id, prices)
-
