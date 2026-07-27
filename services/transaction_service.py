@@ -1,0 +1,82 @@
+"""Registro transaccional de compras y ventas."""
+
+import json
+from decimal import ROUND_HALF_UP, Decimal
+
+from sqlalchemy.orm import Session
+
+from config.settings import Settings, get_settings
+from database.models import AuditLogModel, TransactionModel, TransactionType
+from domain.transaction import TransactionCreate
+from repositories.transaction_repository import TransactionRepository
+from services.portfolio_service import PortfolioService
+from utils.validators import BusinessRuleError
+
+MONEY = Decimal("0.01")
+
+
+class TransactionService:
+    """Valida y persiste operaciones de forma atómica."""
+
+    def __init__(self, session: Session, settings: Settings | None = None) -> None:
+        self.session = session
+        self.settings = settings or get_settings()
+        self.portfolios = PortfolioService(session)
+        self.transactions = TransactionRepository(session)
+
+    def register(self, data: TransactionCreate) -> tuple[TransactionModel, list[str]]:
+        """Registra una operación y devuelve advertencias no bloqueantes."""
+        portfolio = self.portfolios.get_required(data.portfolio_id)
+        gross = data.quantity * data.price
+        fees = data.commission + data.taxes
+        total = (gross + fees if data.transaction_type == TransactionType.BUY else gross - fees)
+        total = total.quantize(MONEY, rounding=ROUND_HALF_UP)
+        warnings: list[str] = []
+        if data.transaction_type == TransactionType.BUY:
+            if total > portfolio.available_cash:
+                raise BusinessRuleError("Efectivo insuficiente para completar la compra.")
+            projected_weight = (
+                total / portfolio.current_value
+                if portfolio.current_value
+                else Decimal("1")
+            )
+            if projected_weight > Decimal(str(self.settings.max_position_weight)):
+                warnings.append("La compra supera el límite configurado por emisora.")
+            portfolio.available_cash -= total
+        else:
+            positions = {
+                p.symbol: p
+                for p in self.portfolios.calculate_positions(data.portfolio_id)
+            }
+            held = positions.get(data.symbol)
+            if held is None or data.quantity > held.total_quantity:
+                raise BusinessRuleError("No hay títulos suficientes para completar la venta.")
+            portfolio.available_cash += total
+
+        transaction = TransactionModel(
+            **data.model_dump(),
+            total_amount=total,
+        )
+        self.transactions.add(transaction)
+        portfolio.current_value = portfolio.available_cash + sum(
+            (
+                p.current_market_value
+                for p in self.portfolios.calculate_positions(data.portfolio_id)
+            ),
+            Decimal("0"),
+        )
+        self.session.add(
+            AuditLogModel(
+                portfolio_id=portfolio.id,
+                action="TRANSACTION_CREATED",
+                details=json.dumps(
+                    {
+                        "type": data.transaction_type.value,
+                        "symbol": data.symbol,
+                        "total": str(total),
+                    }
+                ),
+            )
+        )
+        self.session.commit()
+        return transaction, warnings
