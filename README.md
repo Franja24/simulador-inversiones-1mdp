@@ -7,7 +7,7 @@ Actinver, con capital inicial predeterminado de $1,000,000 MXN.
 > asesoría financiera, no prometen rendimientos y la aplicación no ejecuta
 > operaciones reales.
 
-## Alcance de la Fase 1
+## Alcance implementado (Fases 1 y 2)
 
 - Creación persistente de portafolios.
 - Registro manual de compras y ventas.
@@ -17,10 +17,17 @@ Actinver, con capital inicial predeterminado de $1,000,000 MXN.
 - Advertencia por concentración máxima.
 - Auditoría de operaciones y dashboard inicial en español.
 - Pruebas unitarias del núcleo.
+- Historial persistente de precios manuales.
+- Dashboard ampliado con gráficas interactivas.
+- Historial filtrable y descarga CSV.
+- Importación validada y atómica desde CSV o XLSX.
+- Plantillas descargables de importación.
+- Reportes Excel con resumen, posiciones, operaciones, precios y reglas.
 
-La valoración sin un precio manual o externo usa el costo contable de la posición.
-La captura de precios, importación, Excel, snapshots, Yahoo Finance, indicadores,
-watchlist y señales pertenecen a las fases siguientes.
+`PortfolioService.valuation()` es la fuente de verdad para el valor vigente. El
+campo persistido `Portfolio.current_value` es solo una caché compatible con la
+Fase 1. Si no existe un precio manual, la valoración usa el costo contable de la
+posición y la interfaz muestra la ausencia del precio.
 
 ## Requisitos
 
@@ -89,10 +96,23 @@ Copie `.env.example` como `.env`. El archivo real se ignora en Git. Las variable
 incluyen URL de base de datos, capital inicial, moneda, proveedor futuro y reglas
 de concentración. SQLite persiste por defecto en `data/reto_actinver.db`.
 
+## Migración y compatibilidad
+
+Al iniciar, SQLAlchemy ejecuta `create_all`: agrega la tabla `manual_prices` si no
+existe y conserva `portfolios`, `transactions` y `audit_logs`. Este mecanismo es
+idempotente para tablas nuevas, pero no modifica columnas existentes; una fase
+posterior deberá incorporar Alembic para migraciones de esquema versionadas.
+
+## Importación y reportes
+
+La pantalla **Importar operaciones** ofrece plantillas CSV/XLSX, valida cada fila,
+señala posibles duplicados y guarda el lote en una sola transacción. Cualquier
+fallo revierte la importación completa. La pantalla **Reportes** genera el archivo
+en `data/exports/` y permite descargarlo.
+
 ## Limitaciones y próximos pasos
 
-La Fase 1 no incluye importación CSV/XLSX, edición o eliminación de operaciones,
-precios manuales persistentes, exportación Excel, snapshots ni métricas avanzadas.
-La Fase 2 añadirá dashboard ampliado, captura de precios, importación y reportes.
-La integración con Yahoo Finance y el análisis técnico se reservan para la Fase 3.
-
+No se permite editar o eliminar operaciones. Aún no se incluyen snapshots,
+benchmark histórico, Yahoo Finance, indicadores técnicos, watchlist, señales ni
+métricas avanzadas. La integración externa y el análisis técnico corresponden a
+la Fase 3.

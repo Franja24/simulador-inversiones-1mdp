@@ -83,3 +83,19 @@ class AuditLogModel(Base):
     action: Mapped[str] = mapped_column(String(80))
     details: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ManualPriceModel(Base):
+    """Precio capturado manualmente con historial completo."""
+
+    __tablename__ = "manual_prices"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(30), index=True)
+    price: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    price_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    provider: Mapped[str] = mapped_column(String(40), default="manual")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )

@@ -9,7 +9,7 @@ from database.models import PortfolioModel, TransactionType
 from domain.portfolio import PortfolioCreate
 from domain.position import Position
 from repositories.portfolio_repository import PortfolioRepository
-from repositories.price_repository import PriceRepository
+from repositories.price_repository import PriceSource
 from repositories.transaction_repository import TransactionRepository
 from utils.calculations import percentage_change
 from utils.validators import BusinessRuleError
@@ -47,7 +47,7 @@ class PortfolioService:
         return portfolio
 
     def calculate_positions(
-        self, portfolio_id: int, prices: PriceRepository | None = None
+        self, portfolio_id: int, prices: PriceSource | None = None
     ) -> list[Position]:
         """Reconstruye posiciones usando costo promedio ponderado.
 
@@ -121,6 +121,7 @@ class PortfolioService:
                     else None
                 ),
                 last_updated=now,
+                last_price_date=prices.get_last_update_time(symbol) if prices else None,
             )
             for symbol, state, current, market in preliminary
         ]
@@ -151,9 +152,13 @@ class PortfolioService:
         return realized
 
     def valuation(
-        self, portfolio_id: int, prices: PriceRepository | None = None
+        self, portfolio_id: int, prices: PriceSource | None = None
     ) -> dict[str, Decimal]:
-        """Resume el valor actual y rendimientos del portafolio."""
+        """Calcula la valoración vigente y actúa como fuente principal.
+
+        ``Portfolio.current_value`` se conserva como caché compatible con Fase 1,
+        pero no sustituye este cálculo cuando existen precios disponibles.
+        """
         portfolio = self.get_required(portfolio_id)
         positions = self.calculate_positions(portfolio_id, prices)
         invested = sum((p.current_market_value for p in positions), Decimal("0"))

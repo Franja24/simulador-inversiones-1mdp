@@ -90,7 +90,70 @@ def test_concentration_warning(session: Session, portfolio_id: int, settings: Se
     assert warnings
 
 
+def test_first_buy_below_concentration_limit(
+    session: Session, portfolio_id: int, settings: Settings
+) -> None:
+    _, warnings = TransactionService(session, settings).register(
+        operation(portfolio_id, TransactionType.BUY, "40000", "10")
+    )
+    assert warnings == []
+
+
+def test_additional_buy_crosses_concentration_limit(
+    session: Session, portfolio_id: int, settings: Settings
+) -> None:
+    service = TransactionService(session, settings)
+    service.register(operation(portfolio_id, TransactionType.BUY, "30000", "10"))
+    _, warnings = service.register(
+        operation(portfolio_id, TransactionType.BUY, "25000", "10")
+    )
+    assert warnings
+
+
+def test_additional_buy_stays_below_limit(
+    session: Session, portfolio_id: int, settings: Settings
+) -> None:
+    service = TransactionService(session, settings)
+    service.register(operation(portfolio_id, TransactionType.BUY, "10000", "10"))
+    _, warnings = service.register(
+        operation(portfolio_id, TransactionType.BUY, "10000", "10")
+    )
+    assert warnings == []
+
+
+def test_concentration_with_multiple_symbols(
+    session: Session, portfolio_id: int, settings: Settings
+) -> None:
+    service = TransactionService(session, settings)
+    service.register(
+        operation(portfolio_id, TransactionType.BUY, "30000", "10", "WALMEX.MX")
+    )
+    _, warnings = service.register(
+        operation(portfolio_id, TransactionType.BUY, "30000", "10", "AMXL.MX")
+    )
+    assert warnings == []
+
+
 def test_transaction_validation_rejects_bad_values(portfolio_id: int) -> None:
     with pytest.raises(ValueError):
         operation(portfolio_id, TransactionType.BUY, "-1", "10")
 
+
+def test_symbol_is_normalized(session: Session, portfolio_id: int) -> None:
+    transaction, _ = TransactionService(session).register(
+        operation(portfolio_id, TransactionType.BUY, "1", "10", "  amxl.mx ")
+    )
+    assert transaction.symbol == "AMXL.MX"
+
+
+def test_invalid_operation_does_not_change_cash(
+    session: Session, portfolio_id: int
+) -> None:
+    before = PortfolioService(session).get_required(portfolio_id).available_cash
+    with pytest.raises(BusinessRuleError):
+        TransactionService(session).register(
+            operation(portfolio_id, TransactionType.BUY, "1000001", "1")
+        )
+    session.rollback()
+    after = PortfolioService(session).get_required(portfolio_id).available_cash
+    assert after == before
