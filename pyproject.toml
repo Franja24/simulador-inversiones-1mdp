@@ -14,4 +14,13 @@ python_version = "3.11"
 disallow_untyped_defs = true
 warn_return_any = true
 ignore_missing_imports = true
-
+files = [
+    "config",
+    "database",
+    "domain",
+    "providers",
+    "repositories",
+    "services",
+    "ui",
+    "utils",
+]

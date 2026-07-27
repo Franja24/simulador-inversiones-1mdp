@@ -7,7 +7,7 @@ Actinver, con capital inicial predeterminado de $1,000,000 MXN.
 > asesoría financiera, no prometen rendimientos y la aplicación no ejecuta
 > operaciones reales.
 
-## Alcance implementado (Fases 1 y 2)
+## Alcance implementado (Fases 1, 2 y 3)
 
 - Creación persistente de portafolios.
 - Registro manual de compras y ventas.
@@ -23,6 +23,11 @@ Actinver, con capital inicial predeterminado de $1,000,000 MXN.
 - Importación validada y atómica desde CSV o XLSX.
 - Plantillas descargables de importación.
 - Reportes Excel con resumen, posiciones, operaciones, precios y reglas.
+- Históricos OHLCV persistentes y disponibles sin conexión después de descargarse.
+- Actualización incremental y detección de huecos en el cache local.
+- Proveedores desacoplados para Yahoo Finance, cache y extensiones futuras.
+- Indicadores técnicos informativos con cache persistente.
+- Benchmark configurable, dashboard de mercado y explorador de históricos.
 
 `PortfolioService.valuation()` es la fuente de verdad para el valor vigente. El
 campo persistido `Portfolio.current_value` es solo una caché compatible con la
@@ -96,6 +101,66 @@ Copie `.env.example` como `.env`. El archivo real se ignora en Git. Las variable
 incluyen URL de base de datos, capital inicial, moneda, proveedor futuro y reglas
 de concentración. SQLite persiste por defecto en `data/reto_actinver.db`.
 
+`HISTORICAL_MARKET_PROVIDER` controla el proveedor histórico:
+
+- `yahoo`: descarga mediante `yfinance`.
+- `cache`: trabaja exclusivamente con información guardada.
+- `future`: contrato de integración sin proveedor configurado.
+
+## Arquitectura de inteligencia de mercado
+
+```text
+YahooProvider ─┐
+CacheProvider ─┼─> MarketProvider ─> HistoryService ─> SQLite
+FutureProvider ┘                              │
+                                      IndicatorService
+                                              │
+                                  Mercado / Históricos UI
+```
+
+La UI consume servicios y nunca utiliza directamente las estructuras de
+`yfinance`. Los DTOs `MarketQuote` y `MarketBar` normalizan cotizaciones, OHLC,
+precio ajustado, volumen, dividendos, splits y timezone.
+
+## Flujo de datos y cache
+
+1. `HistoryService.missing_dates()` compara el rango solicitado con SQLite.
+2. Solo se solicitan al proveedor los intervalos hábiles ausentes.
+3. `MarketHistoryRepository` evita duplicados por símbolo y fecha.
+4. Los datos sobreviven al reiniciar y `CacheProvider` permite consultarlos sin red.
+5. Cada sincronización exitosa o fallida queda registrada de forma compacta.
+
+Los huecos consideran lunes a viernes; todavía pueden señalar como faltantes los
+festivos de la BMV.
+
+## Indicadores
+
+`IndicatorService` calcula SMA 5/10/20/50/100/200, EMA 5/9/20/50, RSI 14,
+MACD/señal/histograma, ATR, Bandas de Bollinger, ADX, ROC, momentum, retornos,
+volatilidad móvil, volumen relativo y niveles de 52 semanas. Son datos
+informativos: no generan recomendaciones ni predicciones. El resultado se
+reutiliza mientras no cambie la última fecha histórica.
+
+## Benchmark
+
+`BenchmarkService` usa la misma infraestructura que cualquier emisora. El valor
+predeterminado para el S&P/BMV IPC es `^MXX`, pero el símbolo puede cambiarse en
+la configuración del portafolio.
+
+## Actualizar históricos
+
+Abra **Históricos**, indique símbolo y rango, y pulse **Descargar o actualizar
+histórico**. La pantalla permite visualizar OHLC, volumen, indicadores, calidad
+de datos y exportar CSV.
+
+## Agregar un proveedor
+
+1. Implemente `providers.market_provider.MarketProvider`.
+2. Devuelva exclusivamente `MarketQuote` y `MarketBar`.
+3. Declare nombre, versión y mercados soportados.
+4. Regístrelo en `providers/provider_factory.py`.
+5. Añada pruebas offline con un cliente simulado.
+
 ## Migración y compatibilidad
 
 Al iniciar, SQLAlchemy ejecuta `create_all`: agrega la tabla `manual_prices` si no
@@ -141,6 +206,6 @@ mypy config database domain repositories services providers ui utils
 ## Limitaciones y próximos pasos
 
 No se permite editar o eliminar operaciones. Aún no se incluyen snapshots,
-benchmark histórico, Yahoo Finance, indicadores técnicos, watchlist, señales ni
-métricas avanzadas. La integración externa y el análisis técnico corresponden a
-la Fase 3.
+calendario de festivos BMV, watchlist ni señales. `QuantScoreService` y
+`SimulationService` contienen únicamente contratos y DTOs: no implementan Quant
+Score, Monte Carlo, IA, predicciones ni optimización del portafolio.

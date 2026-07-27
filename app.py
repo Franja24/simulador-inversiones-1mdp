@@ -9,9 +9,10 @@ from config.settings import get_settings
 from database.connection import SessionLocal
 from database.migrations import initialize_database
 from domain.portfolio import PortfolioCreate
+from providers.provider_factory import create_market_provider
 from repositories.portfolio_repository import PortfolioRepository
 from services.portfolio_service import PortfolioService
-from ui import dashboard, imports, prices, reports, transactions
+from ui import dashboard, histories, imports, market, prices, reports, transactions
 from utils.logging_config import configure_logging
 
 initialize_database()
@@ -60,11 +61,21 @@ with SessionLocal() as session:
             "Operaciones",
             "Nueva operación",
             "Precios manuales",
+            "Mercado",
+            "Históricos",
             "Importar operaciones",
             "Reportes",
             "Configuración",
         ],
     )
+    historical_provider = None
+    if section in {"Mercado", "Históricos"}:
+        try:
+            historical_provider = create_market_provider(
+                settings.historical_market_provider, session
+            )
+        except Exception as exc:
+            st.error(f"Proveedor de mercado no disponible: {exc}")
     if section == "Dashboard":
         dashboard.render(session, selected.id)
     elif section == "Operaciones":
@@ -73,6 +84,12 @@ with SessionLocal() as session:
         transactions.render_new(session, selected.id)
     elif section == "Precios manuales":
         prices.render(session, selected.id)
+    elif section == "Mercado":
+        if historical_provider is not None:
+            market.render(session, historical_provider)
+    elif section == "Históricos":
+        if historical_provider is not None:
+            histories.render(session, historical_provider)
     elif section == "Importar operaciones":
         imports.render(session, selected.id)
     elif section == "Reportes":

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     """Valores configurables del sistema."""
 
     market_data_provider: str = "manual"
+    historical_market_provider: str = "yahoo"
     database_url: str = "sqlite:///data/reto_actinver.db"
     default_initial_capital: float = Field(default=1_000_000, gt=0)
     default_currency: str = "MXN"
@@ -29,4 +30,3 @@ def get_settings() -> Settings:
             parents=True, exist_ok=True
         )
     return settings
-

@@ -4,7 +4,17 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import (
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -99,3 +109,55 @@ class ManualPriceModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+
+
+class MarketHistoryModel(Base):
+    """Vela diaria persistente obtenida de un proveedor de mercado."""
+
+    __tablename__ = "market_history"
+    __table_args__ = (
+        UniqueConstraint("symbol", "date", name="uq_market_history_symbol_date"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(30), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    adj_close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[int] = mapped_column(Integer)
+    dividends: Mapped[float] = mapped_column(Float, default=0)
+    stock_splits: Mapped[float] = mapped_column(Float, default=0)
+    timezone: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class IndicatorCacheModel(Base):
+    """Cache serializado de indicadores ligado a la última vela."""
+
+    __tablename__ = "indicator_cache"
+    symbol: Mapped[str] = mapped_column(String(30), primary_key=True)
+    last_history_date: Mapped[date] = mapped_column(Date)
+    payload: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class MarketSyncLogModel(Base):
+    """Resultado compacto de una sincronización de mercado."""
+
+    __tablename__ = "market_sync_logs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(30), index=True)
+    provider: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    rows_added: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

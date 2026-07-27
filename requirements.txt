@@ -7,8 +7,8 @@ pydantic>=2.7,<3
 pydantic-settings>=2.2,<3
 requests>=2.32,<3
 python-dotenv>=1.0,<2
+yfinance>=0.2.54,<1
 pytest>=8.2,<9
 pytest-cov>=5,<7
 ruff>=0.5,<1
 mypy>=1.10,<2
-
