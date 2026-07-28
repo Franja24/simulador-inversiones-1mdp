@@ -7,7 +7,12 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
 
-from domain.quant import BacktestResult, QuantScoreResult, RankingEntry
+from domain.quant import (
+    BacktestResult,
+    QuantScoreResult,
+    RankingEntry,
+    WalkForwardResult,
+)
 
 
 class QuantReportService:
@@ -22,6 +27,7 @@ class QuantReportService:
         results: list[QuantScoreResult],
         backtest: BacktestResult | None = None,
         output_dir: Path | None = None,
+        walk_forward: WalkForwardResult | None = None,
     ) -> Path:
         workbook = Workbook()
         workbook.remove(workbook.active)
@@ -123,6 +129,71 @@ class QuantReportService:
             workbook, "Advertencias", ["Advertencia"],
             [[item] for item in warnings] or [["Ninguna"]],
         )
+        if walk_forward is not None:
+            self._sheet(
+                workbook,
+                "Walk-forward resumen",
+                ["Métrica", "Valor"],
+                [
+                    [key, value]
+                    for key, value in walk_forward.metrics.model_dump().items()
+                ],
+            )
+            self._sheet(
+                workbook,
+                "Ventanas OOS",
+                [
+                    "Ventana", "Entrenamiento inicio", "Entrenamiento fin",
+                    "Evaluación inicio", "Evaluación fin", "Retorno OOS",
+                    "Benchmark OOS", "Drawdown", "Sharpe", "Sortino",
+                ],
+                [
+                    [
+                        item.window, item.training_start, item.training_end,
+                        item.evaluation_start, item.evaluation_end,
+                        item.cumulative_return, item.benchmark_return,
+                        item.max_drawdown, item.sharpe, item.sortino,
+                    ]
+                    for item in walk_forward.windows
+                ],
+            )
+            self._sheet(
+                workbook,
+                "Curva OOS",
+                ["Fecha", "Capital"],
+                [
+                    [item["date"], item["equity"]]
+                    for item in walk_forward.oos_equity_curve
+                ],
+            )
+            self._sheet(
+                workbook,
+                "Operaciones OOS",
+                (
+                    list(walk_forward.oos_trades[0].model_dump())
+                    if walk_forward.oos_trades
+                    else ["Nota"]
+                ),
+                (
+                    [
+                        list(item.model_dump().values())
+                        for item in walk_forward.oos_trades
+                    ]
+                    or [["Sin operaciones"]]
+                ),
+            )
+            self._sheet(
+                workbook,
+                "Comparación OOS",
+                ["Estrategia", "Rendimiento"],
+                [
+                    ["AQS OOS", walk_forward.metrics.aggregate_oos_return],
+                    [
+                        "Benchmark OOS",
+                        walk_forward.metrics.aggregate_benchmark_return,
+                    ],
+                ],
+            )
         destination = output_dir or Path("data/exports")
         destination.mkdir(parents=True, exist_ok=True)
         path = destination / f"reporte_aqs_{datetime.now():%Y-%m-%d_%H-%M-%S}.xlsx"

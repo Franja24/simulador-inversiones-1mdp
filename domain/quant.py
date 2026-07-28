@@ -41,6 +41,7 @@ class QuantScoreResult(BaseModel):
     model_version: str
     benchmark_symbol: str
     market_regime: str
+    data_status: str = "OK"
 
 
 class RankingEntry(BaseModel):
@@ -109,3 +110,55 @@ class BacktestResult(BaseModel):
     warnings: list[str]
     configuration: dict[str, object]
 
+
+class AllocationResult(BaseModel):
+    weights: dict[str, float]
+    cash_weight: float = Field(ge=0, le=1)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class WalkForwardWindowResult(BaseModel):
+    window: int = Field(gt=0)
+    training_start: date
+    training_end: date
+    evaluation_start: date
+    evaluation_end: date
+    cumulative_return: float
+    benchmark_return: float
+    max_drawdown: float
+    sharpe: float | None
+    sortino: float | None
+    trades: list[BacktestTrade]
+    equity_curve: list[dict[str, float | str]]
+    benchmark_curve: list[dict[str, float | str]]
+    frozen_configuration: dict[str, object]
+    warnings: list[str]
+
+
+class WalkForwardMetrics(BaseModel):
+    aggregate_oos_return: float
+    aggregate_benchmark_return: float
+    mean_window_return: float
+    median_window_return: float
+    best_window_return: float
+    worst_window_return: float
+    benchmark_win_rate: float
+    dispersion: float
+    stability: str
+    max_drawdown: float
+
+
+class WalkForwardResult(BaseModel):
+    run_id: str
+    generated_at: datetime
+    model_version: str
+    start_date: date
+    end_date: date
+    benchmark_symbol: str
+    windows: list[WalkForwardWindowResult]
+    oos_equity_curve: list[dict[str, float | str]]
+    oos_benchmark_curve: list[dict[str, float | str]]
+    oos_trades: list[BacktestTrade]
+    metrics: WalkForwardMetrics
+    audit: dict[str, object]
+    warnings: list[str]

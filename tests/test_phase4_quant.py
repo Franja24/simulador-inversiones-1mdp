@@ -192,13 +192,14 @@ def test_aqs_insufficient_data_and_universe_repository(session: Session) -> None
     )
     assert result.confidence < 50
     assert result.warnings
+    assert result.data_status == "LIMITED_UNIVERSE"
     assert QuantScoreService(session).calculate_universe(
         ["^MXX"], date(2025, 1, 2), "^MXX", QuantScoreConfig()
     ) == []
-    with pytest.raises(ValueError):
-        QuantScoreService(session).calculate_symbol(
-            "A", date(2025, 1, 2), "^MXX", universe=["^MXX"]
-        )
+    limited = QuantScoreService(session).calculate_symbol(
+        "A", date(2025, 1, 2), "^MXX", universe=["^MXX"]
+    )
+    assert limited.data_status == "LIMITED_UNIVERSE"
 
 
 def test_future_data_cannot_change_historical_score(session: Session) -> None:

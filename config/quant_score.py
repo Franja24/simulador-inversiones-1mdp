@@ -67,4 +67,13 @@ class BacktestConfig(BaseModel):
     def validate_weighting(self) -> "BacktestConfig":
         if self.weighting != "equal_weight":
             raise ValueError("La primera versión solo admite equal_weight.")
+        if self.rebalance_frequency < self.holding_period:
+            raise ValueError(
+                "Esta versión no admite posiciones solapadas; la frecuencia de "
+                "rebalanceo debe ser mayor o igual al periodo de mantenimiento."
+            )
+        if not self.allow_cash and self.top_n * self.maximum_symbol_weight < 1:
+            raise ValueError(
+                "No es posible asignar 100%: top_n × maximum_symbol_weight < 1."
+            )
         return self

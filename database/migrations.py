@@ -23,6 +23,19 @@ def initialize_database() -> None:
                 connection.execute(
                     text(f"ALTER TABLE indicator_cache ADD COLUMN {name} {definition}")
                 )
+        tables = set(inspect(engine).get_table_names())
+        if "quant_score_results" in tables:
+            quant_columns = {
+                item["name"]
+                for item in inspect(engine).get_columns("quant_score_results")
+            }
+            if "data_status" not in quant_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE quant_score_results ADD COLUMN "
+                        "data_status VARCHAR(30) NOT NULL DEFAULT 'OK'"
+                    )
+                )
 
 
 if __name__ == "__main__":

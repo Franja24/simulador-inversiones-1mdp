@@ -298,15 +298,53 @@ El backtest recalcula el corte transversal en cada fecha de señal, elige el
 el horizonte configurado, aplica costos de entrada y salida y admite solamente
 ponderación equal-weight en esta versión.
 
+La consolidación de Fase 4 prohíbe posiciones solapadas:
+
+```text
+rebalance_frequency >= holding_period
+```
+
+La asignación equal-weight respeta simultáneamente `top_n`,
+`maximum_symbol_weight` y `allow_cash`. Si se permite efectivo, cualquier
+capacidad no asignable queda explícita como efectivo residual. Si se prohíbe,
+debe ser posible invertir 100%; de lo contrario la configuración o la selección
+se rechaza con un error claro.
+
 Compara AQS contra benchmark, universo equal-weight, selección aleatoria con
 semilla reproducible, momentum de 20 sesiones y efectivo. Reporta rendimiento,
 volatilidad, Sharpe y Sortino informativos, drawdown, hit rate, profit factor,
 turnover, retorno relativo e information ratio.
 
-El walk-forward separa ventanas de calibración y evaluación; los pesos permanecen
-fijos y nunca se optimizan con el periodo fuera de muestra. La sensibilidad
-prueba `top_n`, frecuencia y costos, y marca fragilidad cuando el resultado cambia
-materialmente.
+Todos los selectores cuantitativos se valoran con el mismo motor: ejecución D+1,
+costos, disponibilidad de precios, efectivo y máximo por emisora. Una entrada o
+salida que solo exista después del fin del backtest o de la ventana OOS se omite
+y genera una advertencia. Los periodos se componen cronológicamente una sola vez;
+turnover mide cambios reales entre asignaciones.
+
+### Walk-forward OOS real
+
+`run_walk_forward()` separa ventanas reales de entrenamiento y evaluación:
+
+1. delimita el entrenamiento;
+2. congela configuración y versión;
+3. ejecuta el backtest exclusivamente dentro de la evaluación;
+4. impide leer precios posteriores al fin de esa ventana;
+5. guarda métricas, operaciones y curvas OOS por ventana;
+6. concatena únicamente las curvas de evaluación.
+
+Los pesos permanecen fijos en esta versión y nunca se optimizan con el periodo
+fuera de muestra. El resumen muestra rendimiento AQS y benchmark agregados OOS,
+promedio, mediana, mejor y peor ventana, dispersión, drawdown, porcentaje de
+ventanas que superan al benchmark y estabilidad. **Backtest completo no equivale
+a validación fuera de muestra.**
+
+Cada ejecución conserva hash del universo, firma de históricos limitada al rango,
+versión AQS, configuración, semilla, fechas, benchmark, política D+1, costos y
+restricciones. Con los mismos datos e inputs el identificador y resultados son
+idénticos; solo `generated_at` cambia.
+
+La sensibilidad prueba `top_n`, frecuencia, horizonte, costos, confianza y pesos
+±20%, y marca fragilidad cuando el resultado cambia materialmente.
 
 Para reproducir un backtest use el mismo universo, rango, versión, benchmark,
 semilla, frecuencia, horizonte, costos y confianza mínima. La configuración JSON
@@ -329,7 +367,9 @@ impuestos ni acciones corporativas complejas.
 Las pantallas **AQS** y **Backtesting** permiten calcular, explicar, comparar y
 exportar ranking CSV, operaciones CSV y configuración JSON. El reporte Excel AQS
 incluye resumen, ranking, componentes, régimen, histórico, backtest, comparación,
-drawdown, operaciones, configuración y advertencias.
+drawdown, operaciones, configuración y advertencias. Cuando se incluye una
+validación walk-forward agrega `Walk-forward resumen`, `Ventanas OOS`, `Curva
+OOS`, `Operaciones OOS` y `Comparación OOS`.
 
 ## Limitaciones y próximos pasos
 

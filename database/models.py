@@ -248,6 +248,7 @@ class QuantScoreResultModel(Base):
     total_score: Mapped[float] = mapped_column(Float)
     confidence: Mapped[float] = mapped_column(Float)
     classification: Mapped[str] = mapped_column(String(30))
+    data_status: Mapped[str] = mapped_column(String(30), default="OK")
     warnings_json: Mapped[str] = mapped_column(Text)
     diagnostics_json: Mapped[str] = mapped_column(Text)
     calculated_at: Mapped[datetime] = mapped_column(
@@ -308,5 +309,19 @@ class BacktestRunModel(Base):
     end_date: Mapped[date] = mapped_column(Date)
     benchmark_symbol: Mapped[str] = mapped_column(String(30))
     config_json: Mapped[str] = mapped_column(Text)
+    result_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class WalkForwardRunModel(Base):
+    """Validación OOS agregada y reproducible."""
+
+    __tablename__ = "walk_forward_runs"
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model_version: Mapped[str] = mapped_column(String(40), index=True)
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    benchmark_symbol: Mapped[str] = mapped_column(String(30))
+    audit_json: Mapped[str] = mapped_column(Text)
     result_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

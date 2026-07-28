@@ -15,12 +15,14 @@ from database.models import (
     QuantScoreResultModel,
     QuantScoreRunModel,
     QuantUniverseModel,
+    WalkForwardRunModel,
 )
 from domain.quant import (
     BacktestResult,
     MarketRegimeResult,
     QuantScoreResult,
     ScoreComponent,
+    WalkForwardResult,
 )
 
 
@@ -121,6 +123,7 @@ class QuantRepository:
                 total_score=result.total_score,
                 confidence=result.confidence,
                 classification=result.classification,
+                data_status=result.data_status,
                 warnings_json=json.dumps(result.warnings, ensure_ascii=False),
                 diagnostics_json="{}",
             )
@@ -170,6 +173,7 @@ class QuantRepository:
             model_version=model.model_version,
             benchmark_symbol=model.benchmark_symbol,
             market_regime=model.market_regime,
+            data_status=model.data_status,
         )
 
     def previous_results(
@@ -233,6 +237,19 @@ class QuantRepository:
                 end_date=result.end_date,
                 benchmark_symbol=result.benchmark_symbol,
                 config_json=json.dumps(result.configuration),
+                result_json=result.model_dump_json(),
+            )
+        )
+
+    def save_walk_forward(self, result: WalkForwardResult) -> None:
+        self.session.merge(
+            WalkForwardRunModel(
+                run_id=result.run_id,
+                model_version=result.model_version,
+                start_date=result.start_date,
+                end_date=result.end_date,
+                benchmark_symbol=result.benchmark_symbol,
+                audit_json=json.dumps(result.audit, default=str),
                 result_json=result.model_dump_json(),
             )
         )

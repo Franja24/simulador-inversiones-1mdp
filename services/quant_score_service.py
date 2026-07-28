@@ -11,7 +11,7 @@ from config.quant_score import QuantScoreConfig
 from database.models import MarketHistoryModel
 from domain.quant import QuantScoreResult as AQSResult
 from domain.quant import RankingEntry, ScoreComponent
-from repositories.quant_repository import QuantRepository
+from repositories.quant_repository import QuantRepository, QuantUniverseRepository
 from services.factor_normalization import normalize_factor
 from services.indicator_service import IndicatorService
 from services.market_regime_service import MarketRegimeService
@@ -51,7 +51,19 @@ class QuantScoreService:
         universe: list[str] | None = None,
         force: bool = False,
     ) -> AQSResult:
-        selected = universe or [symbol]
+        selected = universe
+        if selected is None:
+            selected = [
+                item.symbol for item in QuantUniverseRepository(self.session).list_active()
+            ]
+        if not selected:
+            raise ValueError(
+                "calculate_symbol requiere un universo explícito o un universo "
+                "cuantitativo activo persistente."
+            )
+        normalized = symbol.strip().upper()
+        if normalized not in {item.strip().upper() for item in selected}:
+            selected = [*selected, normalized]
         results = self.calculate_universe(
             selected,
             effective_date,
@@ -59,7 +71,6 @@ class QuantScoreService:
             config or QuantScoreConfig(),
             force=force,
         )
-        normalized = symbol.strip().upper()
         try:
             return next(item for item in results if item.symbol == normalized)
         except StopIteration as exc:
@@ -382,6 +393,14 @@ class QuantScoreService:
             warnings.append(
                 f"Histórico insuficiente: {rows}/{config.minimum_history_rows} sesiones."
             )
+        data_status = "OK"
+        if universe_size < 3:
+            confidence *= universe_size / 3
+            data_status = "LIMITED_UNIVERSE"
+            warnings.append(
+                "LIMITED_UNIVERSE: se requieren al menos tres emisoras para una "
+                "normalización transversal confiable."
+            )
         return AQSResult(
             symbol=symbol,
             effective_date=effective_date,
@@ -395,6 +414,7 @@ class QuantScoreService:
             model_version=config.model_version,
             benchmark_symbol=benchmark_symbol.upper(),
             market_regime=regime,
+            data_status=data_status,
         )
 
     @staticmethod
