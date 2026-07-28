@@ -7,7 +7,7 @@ Actinver, con capital inicial predeterminado de $1,000,000 MXN.
 > asesoría financiera, no prometen rendimientos y la aplicación no ejecuta
 > operaciones reales.
 
-## Alcance implementado (Fases 1, 2, 3 y 4)
+## Alcance implementado (Fases 1, 2, 3, 4 y 5)
 
 - Creación persistente de portafolios.
 - Registro manual de compras y ventas.
@@ -31,6 +31,7 @@ Actinver, con capital inicial predeterminado de $1,000,000 MXN.
 - Actinver Quant Score explicable, ranking transversal y confianza separada.
 - Régimen de mercado histórico y ajuste visible del score.
 - Backtesting de ranking con ejecución D+1, costos y validación walk-forward.
+- Monte Carlo reproducible, riesgo, stress testing y optimización restringida.
 
 `PortfolioService.valuation()` es la fuente de verdad para el valor vigente. El
 campo persistido `Portfolio.current_value` es solo una caché compatible con la
@@ -371,10 +372,57 @@ drawdown, operaciones, configuración y advertencias. Cuando se incluye una
 validación walk-forward agrega `Walk-forward resumen`, `Ventanas OOS`, `Curva
 OOS`, `Operaciones OOS` y `Comparación OOS`.
 
+## Monte Carlo, riesgo y optimización
+
+> Las simulaciones representan escenarios basados en datos y supuestos
+> históricos. No predicen con certeza el comportamiento futuro y no constituyen
+> asesoría financiera.
+
+`ReturnMatrixService` usa precios ajustados conocidos hasta la fecha efectiva,
+sin forward fill, y alinea emisoras y benchmark por sesiones comunes. La firma
+SHA-256 hace reproducible el conjunto de datos.
+
+Métodos disponibles: `correlated_bootstrap` (predeterminado),
+`independent_bootstrap`, `block_bootstrap`, `parametric_normal` y
+`parametric_student_t`. El método correlacionado muestrea filas completas para
+preservar dependencia transversal; el block bootstrap conserva además
+dependencia temporal local.
+
+Para horizontes de 5, 10 y 15 sesiones se calculan percentiles, probabilidad
+positiva, objetivos, probabilidad de superar al benchmark simulado
+conjuntamente, drawdown, VaR y Expected Shortfall al 90%, 95% y 99%. VaR y ES se
+expresan como magnitudes positivas de pérdida; VaR no es la pérdida máxima
+posible.
+
+Los resultados guardan método solicitado/real, versión, semilla, fecha, firma,
+confianza, supuestos y advertencias. La misma semilla, configuración y datos
+produce el mismo resultado. Solo se persisten resúmenes y muestras pequeñas de
+trayectorias.
+
+La pantalla **Escenarios** incluye caídas generales, shock de la posición
+principal y combinación adversa. Muestra impacto, pérdida, concentración,
+contribución al daño y reglas incumplidas.
+
+La optimización genera candidatos restringidos y los evalúa de forma vectorizada
+sobre una matriz simulada común. El Robust Competition Score configurable es:
+
+```text
+30% probabilidad de superar benchmark
+20% probabilidad positiva
+20% percentil 75
+15% mediana
+10% penalización por Expected Shortfall
+ 5% diversificación
+```
+
+Las reglas cubren número de posiciones, máximo por emisora, efectivo,
+apalancamiento y símbolos permitidos/excluidos. Los rebalanceos son hipotéticos:
+calculan cambios, turnover y costos, pero nunca generan órdenes.
+
 ## Limitaciones y próximos pasos
 
 No se permite editar o eliminar operaciones. Aún no se incluye un calendario
-oficial de festivos BMV. No se implementan Monte Carlo, VaR, Expected Shortfall,
-optimización avanzada, Machine Learning, predicciones, ejecución automática ni
-recomendaciones financieras. `SimulationService` continúa reservado y no ejecuta
-simulaciones.
+oficial de festivos BMV. No se implementan optimización convexa avanzada,
+Machine Learning, predicción exacta, adaptación automática, conexión con broker,
+órdenes reales ni ejecución automática. Los candidatos son informativos, no
+recomendaciones financieras.

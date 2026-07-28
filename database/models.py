@@ -5,6 +5,7 @@ from decimal import Decimal
 from enum import StrEnum
 
 from sqlalchemy import (
+    Column,
     Date,
     DateTime,
     Float,
@@ -12,6 +13,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Table,
     Text,
     UniqueConstraint,
 )
@@ -325,3 +327,31 @@ class WalkForwardRunModel(Base):
     audit_json: Mapped[str] = mapped_column(Text)
     result_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+def _phase5_table(name: str) -> Table:
+    return Table(
+        name,
+        Base.metadata,
+        Column("id", Integer, primary_key=True),
+        Column("run_id", String(64), index=True),
+        Column("model_version", String(40), index=True),
+        Column("effective_date", Date, nullable=True),
+        Column("data_signature", String(64), nullable=True),
+        Column("seed", Integer, nullable=True),
+        Column("status", String(30), default="OK"),
+        Column("payload", Text, nullable=False),
+        Column("created_at", DateTime(timezone=True), default=utc_now),
+    )
+
+
+monte_carlo_runs = _phase5_table("monte_carlo_runs")
+asset_simulation_results = _phase5_table("asset_simulation_results")
+portfolio_simulation_results = _phase5_table("portfolio_simulation_results")
+simulation_horizon_results = _phase5_table("simulation_horizon_results")
+optimization_runs = _phase5_table("optimization_runs")
+optimization_candidates = _phase5_table("optimization_candidates")
+candidate_weights = _phase5_table("candidate_weights")
+stress_test_runs = _phase5_table("stress_test_runs")
+stress_test_results = _phase5_table("stress_test_results")
+robustness_results = _phase5_table("robustness_results")

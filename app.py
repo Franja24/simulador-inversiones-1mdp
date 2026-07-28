@@ -21,6 +21,7 @@ from ui import (
     market,
     prices,
     reports,
+    simulation,
     transactions,
 )
 from utils.logging_config import configure_logging
@@ -75,6 +76,9 @@ with SessionLocal() as session:
             "Históricos",
             "AQS",
             "Backtesting",
+            "Monte Carlo",
+            "Optimización",
+            "Escenarios",
             "Importar operaciones",
             "Reportes",
             "Configuración",
@@ -106,6 +110,12 @@ with SessionLocal() as session:
         aqs.render(session, selected.benchmark_symbol)
     elif section == "Backtesting":
         backtesting.render(session, selected.benchmark_symbol)
+    elif section == "Monte Carlo":
+        simulation.render_monte_carlo(session, selected.benchmark_symbol)
+    elif section == "Optimización":
+        simulation.render_optimization(session, selected.benchmark_symbol)
+    elif section == "Escenarios":
+        simulation.render_scenarios(session, selected.benchmark_symbol)
     elif section == "Importar operaciones":
         imports.render(session, selected.id)
     elif section == "Reportes":
