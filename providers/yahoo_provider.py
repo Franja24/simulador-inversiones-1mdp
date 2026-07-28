@@ -118,7 +118,9 @@ class YahooProvider(MarketProvider):
                 f"No fue posible descargar el histórico de {normalized}."
             ) from exc
         if frame is None or frame.empty:
-            raise MarketProviderError(f"No existen datos históricos para {normalized}.")
+            # Una consulta válida puede corresponder a una sesión sin observación.
+            # HistoryService persiste esas fechas como NO_DATA para no reintentarlas.
+            return []
         frame = self._normalize_columns(frame, normalized)
         required = {"Open", "High", "Low", "Close"}
         missing = required - set(frame.columns)

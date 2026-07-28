@@ -7,7 +7,7 @@ Actinver, con capital inicial predeterminado de $1,000,000 MXN.
 > asesoría financiera, no prometen rendimientos y la aplicación no ejecuta
 > operaciones reales.
 
-## Alcance implementado (Fases 1, 2 y 3)
+## Alcance implementado (Fases 1, 2, 3 y 4)
 
 - Creación persistente de portafolios.
 - Registro manual de compras y ventas.
@@ -28,6 +28,9 @@ Actinver, con capital inicial predeterminado de $1,000,000 MXN.
 - Proveedores desacoplados para Yahoo Finance, cache y extensiones futuras.
 - Indicadores técnicos informativos con cache persistente.
 - Benchmark configurable, dashboard de mercado y explorador de históricos.
+- Actinver Quant Score explicable, ranking transversal y confianza separada.
+- Régimen de mercado histórico y ajuste visible del score.
+- Backtesting de ranking con ejecución D+1, costos y validación walk-forward.
 
 `PortfolioService.valuation()` es la fuente de verdad para el valor vigente. El
 campo persistido `Portfolio.current_value` es solo una caché compatible con la
@@ -221,9 +224,117 @@ ruff check .
 mypy config database domain repositories services providers ui utils
 ```
 
+## Actinver Quant Score (AQS)
+
+El AQS ordena un universo local por fortaleza cuantitativa. No predice un precio
+exacto ni produce instrucciones de operación. Cada resultado conserva fecha
+efectiva, versión, score base, ajuste de régimen, score final, confianza,
+clasificación, componentes, explicaciones y advertencias.
+
+> El AQS es una herramienta cuantitativa informativa. No garantiza rendimientos
+> y no constituye asesoría financiera.
+
+La versión `aqs-1.0` utiliza estos pesos visibles en
+`config/quant_score.py`:
+
+| Factor | Peso |
+|---|---:|
+| Momentum ajustado 20 sesiones | 25% |
+| Momentum ajustado 10 sesiones | 15% |
+| Momentum ajustado 5 sesiones | 10% |
+| Fortaleza relativa a benchmark (20 sesiones comunes) | 15% |
+| Tendencia de medias/EMA/MACD | 10% |
+| Confirmación de volumen | 10% |
+| Riesgo por volatilidad, invertido | 10% |
+| Cercanía no lineal al máximo reciente | 5% |
+
+La fórmula base es:
+
+```text
+AQS_base = Σ(score_normalizado_factor × peso_factor)
+AQS_final = limitar(AQS_base + ajuste_régimen, 0, 100)
+```
+
+El ajuste es opcional, siempre se muestra por separado y está limitado a ±10
+puntos. Las clases son `MUY_FUERTE`, `FUERTE`, `POSITIVA`, `NEUTRAL`, `DÉBIL` y
+`MUY_DÉBIL`; son etiquetas descriptivas, no recomendaciones.
+
+### Normalización y confianza
+
+Los factores se calculan con datos hasta la fecha efectiva, se winsorizan en los
+percentiles configurados y se normalizan transversalmente. El método
+predeterminado es `percentile_rank`, con empates promedio deterministas. También
+está disponible `robust_zscore`, basado en mediana y MAD. La volatilidad se
+invierte porque menor riesgo obtiene mejor score.
+
+Un factor ausente no se rellena silenciosamente como neutral: aporta cero,
+genera una advertencia y reduce la confianza. La confianza (0–100) combina
+histórico disponible, factores calculables, frescura, huecos y tamaño del
+universo. Por ello un AQS alto puede coexistir con confianza baja.
+
+### Universo y persistencia
+
+El universo puede definirse manualmente, desde símbolos con histórico local o
+desde el portafolio. `quant_universe` permite activar/desactivar emisoras y
+guardar empresa, sector y liquidez mínima. El benchmark se excluye del ranking.
+La aplicación nunca descarga cientos de símbolos automáticamente.
+
+Configuraciones, ejecuciones, resultados, componentes y regímenes se guardan por
+versión. Una versión existente no puede cambiar de parámetros; cree un nuevo
+`model_version` para comparar metodologías.
+
+### Régimen
+
+`MarketRegimeService` clasifica el benchmark como `BULLISH`, `BEARISH`,
+`SIDEWAYS` o `INSUFFICIENT_DATA`, usando precio frente a SMA 20, relación
+SMA 20/SMA 50, pendiente, volatilidad y drawdown. Alta volatilidad es un atributo
+independiente, no una segunda etiqueta principal. El cálculo histórico corta
+todos los datos en la fecha efectiva.
+
+## Backtesting y walk-forward
+
+El backtest recalcula el corte transversal en cada fecha de señal, elige el
+`top_n` y ejecuta como mínimo en la apertura disponible de D+1. Mantiene durante
+el horizonte configurado, aplica costos de entrada y salida y admite solamente
+ponderación equal-weight en esta versión.
+
+Compara AQS contra benchmark, universo equal-weight, selección aleatoria con
+semilla reproducible, momentum de 20 sesiones y efectivo. Reporta rendimiento,
+volatilidad, Sharpe y Sortino informativos, drawdown, hit rate, profit factor,
+turnover, retorno relativo e information ratio.
+
+El walk-forward separa ventanas de calibración y evaluación; los pesos permanecen
+fijos y nunca se optimizan con el periodo fuera de muestra. La sensibilidad
+prueba `top_n`, frecuencia y costos, y marca fragilidad cuando el resultado cambia
+materialmente.
+
+Para reproducir un backtest use el mismo universo, rango, versión, benchmark,
+semilla, frecuencia, horizonte, costos y confianza mínima. La configuración JSON
+exportada contiene esos parámetros.
+
+### Prevención y limitaciones de sesgo
+
+- No se entregan al score filas posteriores a la fecha efectiva.
+- Una señal basada en el cierre D nunca usa ese mismo cierre como ejecución.
+- No se inventan retornos con forward fill y el benchmark se alinea por fechas.
+- Los costos no se omiten.
+- Se advierte el posible sesgo de supervivencia del universo proporcionado.
+- Los pesos no se eligen automáticamente usando todo el histórico.
+
+La calidad del resultado depende de históricos locales completos y de que el
+universo histórico refleje las emisoras realmente disponibles en cada fecha.
+Todavía no se modelan delistings, deslizamiento intradía, profundidad de mercado,
+impuestos ni acciones corporativas complejas.
+
+Las pantallas **AQS** y **Backtesting** permiten calcular, explicar, comparar y
+exportar ranking CSV, operaciones CSV y configuración JSON. El reporte Excel AQS
+incluye resumen, ranking, componentes, régimen, histórico, backtest, comparación,
+drawdown, operaciones, configuración y advertencias.
+
 ## Limitaciones y próximos pasos
 
-No se permite editar o eliminar operaciones. Aún no se incluyen snapshots,
-calendario de festivos BMV, watchlist ni señales. `QuantScoreService` y
-`SimulationService` contienen únicamente contratos y DTOs: no implementan Quant
-Score, Monte Carlo, IA, predicciones ni optimización del portafolio.
+No se permite editar o eliminar operaciones. Aún no se incluye un calendario
+oficial de festivos BMV. No se implementan Monte Carlo, VaR, Expected Shortfall,
+optimización avanzada, Machine Learning, predicciones, ejecución automática ni
+recomendaciones financieras. `SimulationService` continúa reservado y no ejecuta
+simulaciones.

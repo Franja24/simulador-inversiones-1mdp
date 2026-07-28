@@ -12,7 +12,17 @@ from domain.portfolio import PortfolioCreate
 from providers.provider_factory import create_market_provider
 from repositories.portfolio_repository import PortfolioRepository
 from services.portfolio_service import PortfolioService
-from ui import dashboard, histories, imports, market, prices, reports, transactions
+from ui import (
+    aqs,
+    backtesting,
+    dashboard,
+    histories,
+    imports,
+    market,
+    prices,
+    reports,
+    transactions,
+)
 from utils.logging_config import configure_logging
 
 initialize_database()
@@ -63,6 +73,8 @@ with SessionLocal() as session:
             "Precios manuales",
             "Mercado",
             "Históricos",
+            "AQS",
+            "Backtesting",
             "Importar operaciones",
             "Reportes",
             "Configuración",
@@ -90,6 +102,10 @@ with SessionLocal() as session:
     elif section == "Históricos":
         if historical_provider is not None:
             histories.render(session, historical_provider)
+    elif section == "AQS":
+        aqs.render(session, selected.benchmark_symbol)
+    elif section == "Backtesting":
+        backtesting.render(session, selected.benchmark_symbol)
     elif section == "Importar operaciones":
         imports.render(session, selected.id)
     elif section == "Reportes":

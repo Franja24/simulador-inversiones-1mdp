@@ -183,3 +183,130 @@ class MarketDateStatusModel(Base):
     checked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
+
+
+class QuantUniverseModel(Base):
+    """Emisora habilitada explícitamente para análisis cuantitativo."""
+
+    __tablename__ = "quant_universe"
+    symbol: Mapped[str] = mapped_column(String(30), primary_key=True)
+    company_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    sector: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    active: Mapped[bool] = mapped_column(default=True, index=True)
+    minimum_liquidity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class QuantScoreConfigModel(Base):
+    """Instantánea inmutable de una configuración versionada."""
+
+    __tablename__ = "quant_score_configs"
+    model_version: Mapped[str] = mapped_column(String(40), primary_key=True)
+    payload: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class QuantScoreRunModel(Base):
+    """Ejecución reproducible del AQS para un universo y una fecha."""
+
+    __tablename__ = "quant_score_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    effective_date: Mapped[date] = mapped_column(Date, index=True)
+    model_version: Mapped[str] = mapped_column(String(40), index=True)
+    benchmark_symbol: Mapped[str] = mapped_column(String(30))
+    universe_json: Mapped[str] = mapped_column(Text)
+    config_json: Mapped[str] = mapped_column(Text)
+    calculated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+
+class QuantScoreResultModel(Base):
+    """Resultado final versionado por símbolo y fecha."""
+
+    __tablename__ = "quant_score_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol",
+            "effective_date",
+            "model_version",
+            name="uq_quant_score_symbol_date_version",
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("quant_score_runs.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(30), index=True)
+    effective_date: Mapped[date] = mapped_column(Date, index=True)
+    model_version: Mapped[str] = mapped_column(String(40), index=True)
+    benchmark_symbol: Mapped[str] = mapped_column(String(30))
+    market_regime: Mapped[str] = mapped_column(String(30))
+    base_score: Mapped[float] = mapped_column(Float)
+    regime_adjustment: Mapped[float] = mapped_column(Float)
+    total_score: Mapped[float] = mapped_column(Float)
+    confidence: Mapped[float] = mapped_column(Float)
+    classification: Mapped[str] = mapped_column(String(30))
+    warnings_json: Mapped[str] = mapped_column(Text)
+    diagnostics_json: Mapped[str] = mapped_column(Text)
+    calculated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+
+class QuantScoreComponentModel(Base):
+    """Desglose auditable de factores que forman un score."""
+
+    __tablename__ = "quant_score_components"
+    __table_args__ = (
+        UniqueConstraint("result_id", "name", name="uq_quant_component_result_name"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    result_id: Mapped[int] = mapped_column(
+        ForeignKey("quant_score_results.id"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(50))
+    raw_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    normalized_score: Mapped[float] = mapped_column(Float)
+    weight: Mapped[float] = mapped_column(Float)
+    weighted_score: Mapped[float] = mapped_column(Float)
+    explanation: Mapped[str] = mapped_column(Text)
+    data_available: Mapped[bool] = mapped_column(default=True)
+
+
+class MarketRegimeSnapshotModel(Base):
+    """Régimen único del benchmark calculado sin información futura."""
+
+    __tablename__ = "market_regime_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "benchmark_symbol",
+            "effective_date",
+            "model_version",
+            name="uq_regime_benchmark_date_version",
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    benchmark_symbol: Mapped[str] = mapped_column(String(30), index=True)
+    effective_date: Mapped[date] = mapped_column(Date, index=True)
+    model_version: Mapped[str] = mapped_column(String(40))
+    primary_regime: Mapped[str] = mapped_column(String(30))
+    high_volatility: Mapped[bool] = mapped_column(default=False)
+    confidence: Mapped[float] = mapped_column(Float)
+    metrics_json: Mapped[str] = mapped_column(Text)
+    warnings_json: Mapped[str] = mapped_column(Text)
+
+
+class BacktestRunModel(Base):
+    """Backtest reproducible con configuración y resultado serializados."""
+
+    __tablename__ = "backtest_runs"
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model_version: Mapped[str] = mapped_column(String(40), index=True)
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    benchmark_symbol: Mapped[str] = mapped_column(String(30))
+    config_json: Mapped[str] = mapped_column(Text)
+    result_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

@@ -16,6 +16,13 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: pytest -v
+      - run: >-
+          pytest -v
+          --cov=services
+          --cov=repositories
+          --cov=providers
+          --cov=utils
+          --cov-report=term-missing
+          --cov-fail-under=85
       - run: ruff check .
       - run: mypy config database domain providers repositories services ui utils
