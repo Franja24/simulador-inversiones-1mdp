@@ -329,6 +329,37 @@ class WalkForwardRunModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class CompetitionSnapshotModel(Base):
+    """Snapshot diario reproducible del asistente de competencia."""
+
+    __tablename__ = "competition_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "portfolio_id",
+            "effective_date",
+            "model_version",
+            name="uq_competition_portfolio_date_version",
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    portfolio_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolios.id"), index=True
+    )
+    effective_date: Mapped[date] = mapped_column(Date, index=True)
+    model_version: Mapped[str] = mapped_column(String(40), index=True)
+    benchmark_symbol: Mapped[str] = mapped_column(String(30))
+    competition_scores_json: Mapped[str] = mapped_column(Text)
+    top_candidates_json: Mapped[str] = mapped_column(Text)
+    recommended_portfolio_json: Mapped[str] = mapped_column(Text)
+    risk_json: Mapped[str] = mapped_column(Text)
+    rebalance_json: Mapped[str] = mapped_column(Text)
+    dashboard_json: Mapped[str] = mapped_column(Text)
+    data_signature: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+
 def _phase5_table(name: str) -> Table:
     return Table(
         name,

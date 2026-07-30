@@ -461,6 +461,39 @@ Medición de referencia local para 15 sesiones, seis series y semilla fija:
 Los tiempos dependen del equipo; el script mide generación, composición de
 retornos, costos y resumen de riesgo, no acceso a base de datos ni renderizado.
 
+## Competition Intelligence
+
+La Fase 6 agrega un asistente diario explicable sin recalcular AQS, Monte Carlo,
+optimización ni régimen. `CompetitionIntelligenceService` consume los snapshots
+persistidos compatibles con la fecha efectiva, la valoración vigente del
+portafolio y el histórico local necesario para la nueva métrica de liquidez.
+
+El Competition Score 0-100 combina pesos configurables de Monte Carlo, AQS,
+momentum, probabilidad de superar al benchmark, liquidez y un componente
+ajustado por riesgo. La configuración predeterminada es 20%, 25%, 15%, 20%,
+10% y 10%, respectivamente. No usa modelos de caja negra: cada candidato
+incluye componentes, métricas de riesgo, régimen, motivo principal y score
+final.
+
+Liquidity Score combina:
+
+```text
+40% spread estimado mediante rango high-low relativo al cierre
+35% volumen histórico en escala logarítmica
+25% facilidad de ejecución por volumen y continuidad de negociación
+```
+
+El **Competition Dashboard** presenta capital, valoración, poder de compra,
+benchmark, retornos relativos, régimen, confianza, riesgo, salud del modelo,
+Top Candidates y Rebalance Advisor. El asesor recomienda rebalancear solo
+cuando el beneficio esperado después de costos supera el mínimo configurado y
+el turnover permanece dentro del límite.
+
+Cada generación guarda un snapshot diario versionado con scores, Top
+Candidates, portafolio recomendado, riesgo, benchmark, rebalanceo y firma de
+datos. Daily Brief puede descargarse como Markdown y PDF; los reportes de
+Dashboard, candidatos y rebalanceo se exportan a Excel y CSV.
+
 ## Limitaciones y próximos pasos
 
 No se permite editar o eliminar operaciones. Aún no se incluye un calendario

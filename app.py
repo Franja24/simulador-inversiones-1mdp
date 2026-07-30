@@ -15,6 +15,7 @@ from services.portfolio_service import PortfolioService
 from ui import (
     aqs,
     backtesting,
+    competition,
     dashboard,
     histories,
     imports,
@@ -81,6 +82,7 @@ with SessionLocal() as session:
             "Optimización",
             "Escenarios",
             "Estado del Modelo",
+            "Competition Intelligence",
             "Importar operaciones",
             "Reportes",
             "Configuración",
@@ -120,6 +122,8 @@ with SessionLocal() as session:
         simulation.render_scenarios(session, selected.benchmark_symbol)
     elif section == "Estado del Modelo":
         model_status.render(session, selected.benchmark_symbol)
+    elif section == "Competition Intelligence":
+        competition.render(session, selected.id)
     elif section == "Importar operaciones":
         imports.render(session, selected.id)
     elif section == "Reportes":
