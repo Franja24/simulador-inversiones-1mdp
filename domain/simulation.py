@@ -52,6 +52,9 @@ class AssetSimulationResult(BaseModel):
     warnings: list[str]
     data_signature: str
     seed: int
+    configuration: dict[str, object] = Field(default_factory=dict)
+    universe: list[str] = Field(default_factory=list)
+    restrictions: dict[str, object] = Field(default_factory=dict)
     sample_paths: dict[str, list[list[float]]] = Field(default_factory=dict)
 
 
@@ -75,6 +78,9 @@ class PortfolioSimulationResult(BaseModel):
     warnings: list[str]
     data_signature: str
     seed: int
+    configuration: dict[str, object] = Field(default_factory=dict)
+    universe: list[str] = Field(default_factory=list)
+    restrictions: dict[str, object] = Field(default_factory=dict)
     sample_paths: dict[str, list[list[float]]] = Field(default_factory=dict)
 
 

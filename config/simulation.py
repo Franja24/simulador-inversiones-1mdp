@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class MonteCarloConfig(BaseModel):
-    model_version: str = "mc-1.0"
+    model_version: str = "mc-1.1"
     simulation_method: str = "correlated_bootstrap"
     horizons: list[int] = Field(default_factory=lambda: [5, 10, 15])
     simulation_count: int = Field(default=10_000, ge=100, le=100_000)
@@ -90,6 +90,7 @@ class PortfolioOptimizationConfig(BaseModel):
     concentration_penalty: float = Field(default=0, ge=0)
     turnover_penalty: float = Field(default=0, ge=0)
     random_seed: int = 42
+    evaluation_batch_size: int = Field(default=32, ge=1, le=1_024)
     robust_weights: dict[str, float] = Field(
         default_factory=lambda: {
             "probability_beating_benchmark": 0.30,

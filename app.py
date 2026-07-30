@@ -19,6 +19,7 @@ from ui import (
     histories,
     imports,
     market,
+    model_status,
     prices,
     reports,
     simulation,
@@ -79,6 +80,7 @@ with SessionLocal() as session:
             "Monte Carlo",
             "Optimización",
             "Escenarios",
+            "Estado del Modelo",
             "Importar operaciones",
             "Reportes",
             "Configuración",
@@ -116,6 +118,8 @@ with SessionLocal() as session:
         simulation.render_optimization(session, selected.benchmark_symbol)
     elif section == "Escenarios":
         simulation.render_scenarios(session, selected.benchmark_symbol)
+    elif section == "Estado del Modelo":
+        model_status.render(session, selected.benchmark_symbol)
     elif section == "Importar operaciones":
         imports.render(session, selected.id)
     elif section == "Reportes":

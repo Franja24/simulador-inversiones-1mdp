@@ -431,6 +431,36 @@ salida. El drawdown se obtiene de las trayectorias acumuladas, no se aproxima
 con Expected Shortfall. La robustez reevalúa semillas, ventanas, métodos y
 shocks, y el rebalanceo separa compras, ventas, valor bruto, turnover y costo.
 
+### Consolidación 5.5 antes de Machine Learning
+
+La versión `mc-1.1` centraliza VaR, Expected Shortfall, drawdown y costos para
+que simulación, optimización y reportes compartan exactamente la misma
+convención. VaR y ES son magnitudes positivas de pérdida; drawdown incluye el
+capital inicial como primer máximo; costos y slippage son valores por lado y el
+impacto de una operación completa considera entrada y salida.
+
+La optimización evalúa candidatos en lotes configurables para limitar memoria,
+mantiene una matriz simulada común y registra criterios de aceptación,
+restricciones y motivos de rechazo. Cada ejecución persistida incluye versión,
+configuración, semilla, firma de datos, duración, universo, restricciones,
+método y fecha efectiva. La duración se excluye de la identidad reproducible.
+
+La pantalla **Estado del Modelo** muestra la versión y la última instantánea de
+calidad, fecha de datos, benchmark, régimen, método, horizonte, semilla y estado
+en vivo de GitHub Actions. El benchmark reproducible de 2,000, 10,000 y 50,000
+escenarios está disponible en `scripts/benchmark_simulation.py`.
+
+Medición de referencia local para 15 sesiones, seis series y semilla fija:
+
+| Simulaciones | Tiempo | Memoria pico | Cubo `float32` |
+|---:|---:|---:|---:|
+| 2,000 | 0.015 s | 1.18 MB | 0.69 MB |
+| 10,000 | 0.026 s | 5.80 MB | 3.43 MB |
+| 50,000 | 0.113 s | 29.00 MB | 17.17 MB |
+
+Los tiempos dependen del equipo; el script mide generación, composición de
+retornos, costos y resumen de riesgo, no acceso a base de datos ni renderizado.
+
 ## Limitaciones y próximos pasos
 
 No se permite editar o eliminar operaciones. Aún no se incluye un calendario

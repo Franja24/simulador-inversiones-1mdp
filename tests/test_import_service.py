@@ -17,7 +17,9 @@ from utils.validators import BusinessRuleError
 
 def sample_frame() -> pd.DataFrame:
     """Crea un lote válido de compra y venta parcial."""
-    now = datetime.now(UTC).replace(microsecond=0)
+    now = datetime.combine(date.today(), datetime.min.time(), tzinfo=UTC).replace(
+        hour=12
+    )
     return pd.DataFrame(
         [
             {

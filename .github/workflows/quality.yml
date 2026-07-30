@@ -23,6 +23,6 @@ jobs:
           --cov=providers
           --cov=utils
           --cov-report=term-missing
-          --cov-fail-under=85
+          --cov-fail-under=90
       - run: ruff check .
       - run: mypy config database domain providers repositories services ui utils

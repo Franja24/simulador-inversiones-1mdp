@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=services --cov=utils --cov-report=term-missing --cov-fail-under=85"
+addopts = "-q --cov=services --cov=utils --cov-report=term-missing --cov-fail-under=90"
 
 [tool.ruff]
 line-length = 100

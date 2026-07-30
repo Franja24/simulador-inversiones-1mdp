@@ -15,6 +15,7 @@ from domain.simulation import (
     RobustnessResult,
 )
 from services.monte_carlo_service import MonteCarloService
+from services.risk_metrics_service import path_drawdowns, round_trip_cost_rate
 
 
 class PortfolioOptimizationService:
@@ -29,6 +30,14 @@ class PortfolioOptimizationService:
         if count < config.minimum_symbols:
             raise ValueError("El universo no cumple el mínimo de emisoras.")
         maximum_positions = min(config.maximum_symbols, count)
+        minimum_invested = 1 - config.maximum_cash_weight if config.allow_cash else 1
+        feasible = any(
+            positions * config.minimum_symbol_weight <= 1
+            and positions * config.maximum_symbol_weight >= minimum_invested
+            for positions in range(config.minimum_symbols, maximum_positions + 1)
+        )
+        if not feasible:
+            raise ValueError("Restricciones imposibles para el universo seleccionado.")
         rng = np.random.default_rng(config.random_seed)
         output: list[np.ndarray] = []
         attempts = 0
@@ -58,8 +67,11 @@ class PortfolioOptimizationService:
             candidate = np.zeros(count)
             candidate[selected] = subset
             output.append(candidate)
-        if not output:
-            raise ValueError("Restricciones imposibles: no se generaron candidatos.")
+        if len(output) < config.candidate_count:
+            raise ValueError(
+                "Restricciones demasiado estrechas: no se generó el total "
+                "solicitado de candidatos."
+            )
         return cast(np.ndarray, np.vstack(output))
 
     def calculate_objective(
@@ -138,33 +150,27 @@ class PortfolioOptimizationService:
         cube, method, warnings = self.monte_carlo._simulate_cube(
             matrix, optimization_config.horizon_sessions, simulation_config
         )
-        daily_paths = np.einsum("sha,ca->shc", cube[:, :, :-1], candidates)
-        terminal = np.prod(1 + daily_paths, axis=1) - 1
-        round_trip_cost = 2 * (
-            simulation_config.transaction_cost_bps_per_side
-            + simulation_config.slippage_bps_per_side
-        ) / 10_000
-        traded_fraction = candidates.sum(axis=1)
-        terminal -= traded_fraction[None, :] * round_trip_cost
-        benchmark_terminal = np.prod(1 + cube[:, :, -1], axis=1) - 1
-        median = np.median(terminal, axis=0)
-        expected = terminal.mean(axis=0)
-        positive = (terminal > 0).mean(axis=0)
-        beating = (terminal > benchmark_terminal[:, None]).mean(axis=0)
-        p75 = np.percentile(terminal, 75, axis=0)
-        p05 = np.percentile(terminal, 5, axis=0)
-        var = np.maximum(0, -p05)
-        es = np.array(
-            [
-                max(0, -terminal[:, index][terminal[:, index] <= p05[index]].mean())
-                for index in range(candidates.shape[0])
-            ]
+        round_trip_cost = round_trip_cost_rate(
+            simulation_config.transaction_cost_bps_per_side,
+            simulation_config.slippage_bps_per_side,
         )
-        cumulative = np.cumprod(1 + daily_paths, axis=1)
-        peaks = np.maximum.accumulate(cumulative, axis=1)
-        drawdowns = np.maximum(0, -(cumulative / peaks - 1).min(axis=1))
-        expected_drawdown = drawdowns.mean(axis=0)
-        drawdown_p95 = np.percentile(drawdowns, 95, axis=0)
+        benchmark_terminal = np.prod(1 + cube[:, :, -1], axis=1) - 1
+        evaluated = self._evaluate_in_batches(
+            cube[:, :, :-1],
+            candidates,
+            benchmark_terminal,
+            round_trip_cost,
+            optimization_config.evaluation_batch_size,
+        )
+        expected = evaluated["expected"]
+        median = evaluated["median"]
+        positive = evaluated["positive"]
+        beating = evaluated["beating"]
+        p75 = evaluated["p75"]
+        var = evaluated["var"]
+        es = evaluated["expected_shortfall"]
+        expected_drawdown = evaluated["expected_drawdown"]
+        drawdown_p95 = evaluated["drawdown_p95"]
         concentration = (candidates**2).sum(axis=1)
         diversification = 1 - concentration
         aqs_vector = np.array(
@@ -275,7 +281,9 @@ class PortfolioOptimizationService:
         )
         return OptimizationResult(
             run_id=hashlib.sha256(material.encode()).hexdigest()[:24],
-            generated_at=datetime.now(UTC),
+            generated_at=datetime.combine(
+                effective_date, datetime.min.time(), tzinfo=UTC
+            ),
             effective_date=effective_date,
             objective=optimization_config.objective,
             requested_objective=optimization_config.objective,
@@ -287,6 +295,10 @@ class PortfolioOptimizationService:
                 "optimization": optimization_config.model_dump(),
                 "filters": metrics,
                 "method_used": method,
+                "universe": universe,
+                "acceptance_criteria": self.acceptance_criteria(
+                    optimization_config
+                ),
             },
             data_signature=signature,
             warnings=warnings,
@@ -331,6 +343,92 @@ class PortfolioOptimizationService:
         return output
 
     @staticmethod
+    def acceptance_criteria(
+        config: PortfolioOptimizationConfig,
+    ) -> dict[str, object]:
+        """Criterios estructurales y de riesgo aplicados a todo candidato."""
+        return {
+            "minimum_symbols": config.minimum_symbols,
+            "maximum_symbols": config.maximum_symbols,
+            "minimum_symbol_weight": config.minimum_symbol_weight,
+            "maximum_symbol_weight": config.maximum_symbol_weight,
+            "allow_cash": config.allow_cash,
+            "maximum_cash_weight": config.maximum_cash_weight,
+            "maximum_concentration": config.maximum_concentration,
+            "maximum_var": config.maximum_var,
+            "maximum_expected_shortfall": config.maximum_expected_shortfall,
+            "minimum_probability_positive": config.minimum_probability_positive,
+            "minimum_probability_beating_benchmark": (
+                config.minimum_probability_beating_benchmark
+            ),
+        }
+
+    @staticmethod
+    def _evaluate_in_batches(
+        asset_cube: np.ndarray,
+        candidates: np.ndarray,
+        benchmark_terminal: np.ndarray,
+        round_trip_cost: float,
+        batch_size: int,
+    ) -> dict[str, np.ndarray]:
+        metrics: dict[str, list[np.ndarray]] = {
+            key: []
+            for key in [
+                "expected",
+                "median",
+                "positive",
+                "beating",
+                "p75",
+                "var",
+                "expected_shortfall",
+                "expected_drawdown",
+                "drawdown_p95",
+            ]
+        }
+        for start in range(0, len(candidates), batch_size):
+            batch = candidates[start : start + batch_size].astype(
+                np.float32, copy=False
+            )
+            daily_paths = np.einsum(
+                "sha,ca->shc", asset_cube, batch, optimize=True
+            )
+            terminal = np.prod(1 + daily_paths, axis=1) - 1
+            terminal -= batch.sum(axis=1)[None, :] * round_trip_cost
+            p05 = np.percentile(terminal, 5, axis=0)
+            paths_by_candidate = daily_paths.transpose(0, 2, 1).reshape(
+                -1, daily_paths.shape[1]
+            )
+            drawdowns = path_drawdowns(paths_by_candidate).reshape(
+                daily_paths.shape[0], daily_paths.shape[2]
+            )
+            metrics["expected"].append(terminal.mean(axis=0))
+            metrics["median"].append(np.median(terminal, axis=0))
+            metrics["positive"].append((terminal > 0).mean(axis=0))
+            metrics["beating"].append(
+                (terminal > benchmark_terminal[:, None]).mean(axis=0)
+            )
+            metrics["p75"].append(np.percentile(terminal, 75, axis=0))
+            metrics["var"].append(np.maximum(0, -p05))
+            metrics["expected_shortfall"].append(
+                np.array(
+                    [
+                        max(
+                            0,
+                            -terminal[:, index][
+                                terminal[:, index] <= p05[index]
+                            ].mean(),
+                        )
+                        for index in range(batch.shape[0])
+                    ]
+                )
+            )
+            metrics["expected_drawdown"].append(drawdowns.mean(axis=0))
+            metrics["drawdown_p95"].append(
+                np.percentile(drawdowns, 95, axis=0)
+            )
+        return {key: np.concatenate(value) for key, value in metrics.items()}
+
+    @staticmethod
     def _risk_reasons(
         index: int,
         candidates: np.ndarray,
@@ -343,6 +441,19 @@ class PortfolioOptimizationService:
     ) -> list[str]:
         reasons: list[str] = []
         cash = 1 - float(candidates[index].sum())
+        weights = candidates[index][candidates[index] > 0]
+        if len(weights) < config.minimum_symbols:
+            reasons.append("Número de posiciones inferior al mínimo")
+        if len(weights) > config.maximum_symbols:
+            reasons.append("Número de posiciones superior al máximo")
+        if len(weights) and weights.min() < config.minimum_symbol_weight - 1e-9:
+            reasons.append("Peso por emisora inferior al mínimo")
+        if len(weights) and weights.max() > config.maximum_symbol_weight + 1e-9:
+            reasons.append("Peso por emisora superior al máximo")
+        if cash < -1e-9:
+            reasons.append("Apalancamiento no permitido")
+        if not config.allow_cash and cash > 1e-9:
+            reasons.append("Efectivo no permitido")
         checks = [
             (config.maximum_var, var[index], "VaR excede el máximo"),
             (

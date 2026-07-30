@@ -3,6 +3,7 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 from openpyxl import Workbook
@@ -53,9 +54,40 @@ class SimulationReportService:
                 ["Método", simulation.actual_method],
                 ["Versión", simulation.model_version],
                 ["Confianza", simulation.confidence],
+                ["Universo", ", ".join(simulation.universe)],
+                [
+                    "Horizontes",
+                    ", ".join(
+                        map(
+                            str,
+                            cast(
+                                list[object],
+                                simulation.configuration.get("horizons", []),
+                            ),
+                        )
+                    ),
+                ],
+                ["Semilla", simulation.seed],
+                ["Firma de datos", simulation.data_signature],
+                [
+                    "Resumen ejecutivo",
+                    (
+                        "Escenarios reproducibles bajo supuestos históricos; "
+                        "validar riesgos, restricciones y advertencias."
+                    ),
+                ],
             ],
         )
-        self._sheet(workbook, "Configuración", ["Pesos JSON"], [[json.dumps(simulation.weights)]])
+        self._sheet(
+            workbook,
+            "Configuración",
+            ["Concepto", "JSON"],
+            [
+                ["Simulación", json.dumps(simulation.configuration)],
+                ["Restricciones", json.dumps(simulation.restrictions)],
+                ["Pesos", json.dumps(simulation.weights)],
+            ],
+        )
         self._sheet(workbook, "Datos utilizados", ["Firma"], [[simulation.data_signature]])
         self._sheet(
             workbook,
@@ -162,8 +194,26 @@ class SimulationReportService:
         self._sheet(
             workbook,
             "Optimización",
-            ["Configuración"],
-            [[json.dumps(optimization.configuration) if optimization else "No incluida"]],
+            ["Concepto", "Valor"],
+            (
+                [
+                    ["Objetivo solicitado", optimization.requested_objective],
+                    ["Objetivo utilizado", optimization.used_objective],
+                    ["Aceptados", len(optimization.candidates)],
+                    ["Rechazados", len(optimization.rejected_candidates)],
+                    ["Configuración", json.dumps(optimization.configuration)],
+                    [
+                        "Criterios",
+                        json.dumps(
+                            optimization.configuration.get(
+                                "acceptance_criteria", {}
+                            )
+                        ),
+                    ],
+                ]
+                if optimization
+                else [["Estado", "No incluida"]]
+            ),
         )
         self._sheet(workbook, "Robustez", ["Nota"], [["Evaluación disponible por candidato"]])
         self._sheet(
@@ -189,9 +239,29 @@ class SimulationReportService:
 
     @staticmethod
     def candidates_csv(result: OptimizationResult) -> bytes:
-        return str(
-            pd.DataFrame([item.model_dump() for item in result.candidates]).to_csv(index=False)
-        ).encode()
+        accepted = [
+            {
+                **item.model_dump(),
+                "status": "ACCEPTED",
+                "rejection_reasons": "",
+                "requested_objective": result.requested_objective,
+                "used_objective": result.used_objective,
+            }
+            for item in result.candidates
+        ]
+        rejected = [
+            {
+                "candidate_id": item.candidate_id,
+                "weights": item.weights,
+                "status": "REJECTED",
+                "rejection_reasons": "; ".join(item.reasons),
+                **item.metrics,
+                "requested_objective": result.requested_objective,
+                "used_objective": result.used_objective,
+            }
+            for item in result.rejected_candidates
+        ]
+        return str(pd.DataFrame([*accepted, *rejected]).to_csv(index=False)).encode()
 
     @staticmethod
     def weights_csv(result: OptimizationResult) -> bytes:

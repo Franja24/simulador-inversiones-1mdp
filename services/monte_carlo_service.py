@@ -16,6 +16,12 @@ from domain.simulation import (
 )
 from services.market_regime_service import MarketRegimeService
 from services.return_matrix_service import ReturnMatrixService
+from services.risk_metrics_service import (
+    expected_shortfall,
+    path_drawdowns,
+    round_trip_cost_rate,
+    value_at_risk,
+)
 
 
 class MonteCarloService:
@@ -47,15 +53,14 @@ class MonteCarloService:
         regime = self.regimes.calculate(benchmark_symbol, effective_date)
         horizons: list[HorizonSimulationResult] = []
         samples: dict[str, list[list[float]]] = {}
-        actual_method = config.simulation_method
+        maximum_horizon = max(config.horizons)
+        cube, actual_method, method_warnings = self._simulate_cube(
+            matrix, maximum_horizon, config
+        )
+        warnings.extend(method_warnings)
         for horizon in config.horizons:
-            cube, used, method_warnings = self._simulate_cube(
-                matrix, horizon, config
-            )
-            actual_method = used
-            warnings.extend(method_warnings)
-            asset_paths = cube[:, :, 0]
-            benchmark_paths = cube[:, :, 1]
+            asset_paths = cube[:, :horizon, 0]
+            benchmark_paths = cube[:, :horizon, 1]
             terminal = self._terminal(asset_paths, config)
             benchmark_terminal = self._terminal(benchmark_paths, config)
             horizons.append(
@@ -84,6 +89,12 @@ class MonteCarloService:
             warnings=list(dict.fromkeys(warnings)),
             data_signature=self.returns.data_signature(matrix),
             seed=config.random_seed,
+            configuration=config.model_dump(),
+            universe=symbols,
+            restrictions={
+                "minimum_history_rows": config.minimum_history_rows,
+                "maximum_missing_ratio": config.maximum_missing_ratio,
+            },
             sample_paths=samples,
         )
 
@@ -131,15 +142,15 @@ class MonteCarloService:
         regime = self.regimes.calculate(benchmark_symbol, effective_date)
         horizons: list[HorizonSimulationResult] = []
         sample_paths: dict[str, list[list[float]]] = {}
-        actual_method = config.simulation_method
+        maximum_horizon = max(config.horizons)
+        cube, actual_method, method_warnings = self._simulate_cube(
+            matrix, maximum_horizon, config
+        )
+        warnings.extend(method_warnings)
         expected_drawdowns: list[float] = []
         for horizon in config.horizons:
-            cube, actual_method, method_warnings = self._simulate_cube(
-                matrix, horizon, config
-            )
-            warnings.extend(method_warnings)
-            portfolio_paths = cube[:, :, :-1] @ weight_vector
-            benchmark_paths = cube[:, :, -1]
+            portfolio_paths = cube[:, :horizon, :-1] @ weight_vector
+            benchmark_paths = cube[:, :horizon, -1]
             terminal = self._terminal(portfolio_paths, config)
             benchmark_terminal = self._terminal(benchmark_paths, config)
             summary = self._summarize(
@@ -192,6 +203,13 @@ class MonteCarloService:
             warnings=list(dict.fromkeys(warnings)),
             data_signature=self.returns.data_signature(matrix),
             seed=config.random_seed,
+            configuration=config.model_dump(),
+            universe=symbols,
+            restrictions={
+                "maximum_symbol_weight": maximum_symbol_weight,
+                "allow_cash": allow_cash,
+                "cash_weight": max(0, inferred_cash),
+            },
             sample_paths=sample_paths,
         )
 
@@ -233,7 +251,7 @@ class MonteCarloService:
         matrix: pd.DataFrame, horizon: int, config: MonteCarloConfig
     ) -> tuple[np.ndarray, str, list[str]]:
         rng = np.random.default_rng(config.random_seed + horizon)
-        values = matrix.to_numpy(dtype=float)
+        values = matrix.to_numpy(dtype=np.float32, copy=False)
         count, assets = values.shape
         simulations = config.simulation_count
         method = config.simulation_method
@@ -278,7 +296,10 @@ class MonteCarloService:
                 0, max(1, count - config.block_size + 1),
                 size=(simulations, blocks),
             )
-            cube = np.empty((simulations, blocks * config.block_size, assets))
+            cube = np.empty(
+                (simulations, blocks * config.block_size, assets),
+                dtype=np.float32,
+            )
             for offset in range(config.block_size):
                 cube[:, offset::config.block_size, :] = values[
                     np.minimum(starts + offset, count - 1)
@@ -307,7 +328,7 @@ class MonteCarloService:
                 cube = mean + centered / scale * np.sqrt((degrees - 2) / degrees)
             else:
                 cube = mean + centered
-        return cube, method, warnings
+        return cube.astype(np.float32, copy=False), method, warnings
 
     @staticmethod
     def _terminal(paths: np.ndarray, config: MonteCarloConfig) -> np.ndarray:
@@ -316,10 +337,10 @@ class MonteCarloService:
             if config.return_type == "log"
             else np.prod(1 + paths, axis=1) - 1
         )
-        costs = 2 * (
-            config.transaction_cost_bps_per_side
-            + config.slippage_bps_per_side
-        ) / 10_000
+        costs = round_trip_cost_rate(
+            config.transaction_cost_bps_per_side,
+            config.slippage_bps_per_side,
+        )
         return cast(np.ndarray, np.maximum(-1, terminal - costs))
 
     @staticmethod
@@ -347,9 +368,7 @@ class MonteCarloService:
         levels = [0.90, 0.95, 0.99]
         var = {f"{int(level * 100)}": cls.value_at_risk(terminal, level) for level in levels}
         es = {f"{int(level * 100)}": cls.expected_shortfall(terminal, level) for level in levels}
-        cumulative = np.cumprod(1 + daily_paths, axis=1)
-        peaks = np.maximum.accumulate(cumulative, axis=1)
-        drawdowns = np.maximum(0, -(cumulative / peaks - 1).min(axis=1))
+        drawdowns = path_drawdowns(daily_paths)
         percentiles = np.percentile(
             terminal, [1, 5, 10, 25, 50, 75, 90, 95, 99]
         )
@@ -395,13 +414,11 @@ class MonteCarloService:
 
     @staticmethod
     def value_at_risk(returns: np.ndarray, confidence: float) -> float:
-        return max(0.0, -float(np.quantile(returns, 1 - confidence)))
+        return value_at_risk(returns, confidence)
 
     @classmethod
     def expected_shortfall(cls, returns: np.ndarray, confidence: float) -> float:
-        cutoff = -cls.value_at_risk(returns, confidence)
-        tail = returns[returns <= cutoff]
-        return max(0.0, -float(tail.mean())) if len(tail) else 0.0
+        return expected_shortfall(returns, confidence)
 
     @staticmethod
     def _sample_paths(paths: np.ndarray, config: MonteCarloConfig) -> list[list[float]]:
