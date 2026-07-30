@@ -119,18 +119,38 @@ class SimulationReportService:
             [[key, value] for key, value in simulation.weights.items()],
         )
         candidates = optimization.candidates if optimization else []
+        rejected = optimization.rejected_candidates if optimization else []
         self._sheet(
             workbook,
             "Candidatos",
-            ["ID", "Score", "Retorno", "ES"],
+            ["ID", "Estado", "Score", "Retorno", "VaR", "ES", "Drawdown", "DD P95", "Motivos"],
             [
                 [
                     item.candidate_id,
+                    "ACEPTADO",
                     item.objective_score,
                     item.expected_return,
+                    item.value_at_risk,
                     item.expected_shortfall,
+                    item.expected_drawdown,
+                    item.drawdown_p95,
+                    "",
                 ]
                 for item in candidates
+            ]
+            + [
+                [
+                    item.candidate_id,
+                    "RECHAZADO",
+                    "",
+                    "",
+                    item.metrics.get("var"),
+                    item.metrics.get("expected_shortfall"),
+                    "",
+                    "",
+                    "; ".join(item.reasons),
+                ]
+                for item in rejected
             ],
         )
         self._sheet(

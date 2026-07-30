@@ -419,6 +419,18 @@ Las reglas cubren número de posiciones, máximo por emisora, efectivo,
 apalancamiento y símbolos permitidos/excluidos. Los rebalanceos son hipotéticos:
 calculan cambios, turnover y costos, pero nunca generan órdenes.
 
+La consolidación de Fase 5 incorpora ocho objetivos reales: retorno esperado,
+mediana, probabilidad positiva, probabilidad de superar benchmark, retorno/VaR,
+retorno/Expected Shortfall, probabilidad ponderada por AQS y Robust Competition
+Score. Los candidatos usan subconjuntos variables, efectivo opcional y pesos
+cero fuera del subconjunto. Antes de simular se filtran benchmark, exclusiones,
+AQS, confianza, liquidez e historial; los rechazos por riesgo quedan auditados.
+
+Los costos y el deslizamiento se configuran por lado y se aplican en entrada y
+salida. El drawdown se obtiene de las trayectorias acumuladas, no se aproxima
+con Expected Shortfall. La robustez reevalúa semillas, ventanas, métodos y
+shocks, y el rebalanceo separa compras, ventas, valor bruto, turnover y costo.
+
 ## Limitaciones y próximos pasos
 
 No se permite editar o eliminar operaciones. Aún no se incluye un calendario

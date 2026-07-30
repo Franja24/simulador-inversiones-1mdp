@@ -20,8 +20,8 @@ class MonteCarloConfig(BaseModel):
     winsor_upper: float = Field(default=0.99, gt=0.5, le=1)
     confidence_level: float = Field(default=0.95, gt=0, lt=1)
     risk_free_rate: float = 0.0
-    transaction_cost_bps: float = Field(default=10, ge=0)
-    slippage_bps: float = Field(default=0, ge=0)
+    transaction_cost_bps_per_side: float = Field(default=10, ge=0)
+    slippage_bps_per_side: float = Field(default=0, ge=0)
     maximum_missing_ratio: float = Field(default=0.05, ge=0, le=1)
     minimum_confidence: float = Field(default=50, ge=0, le=100)
     return_type: str = "simple"
@@ -44,7 +44,9 @@ class MonteCarloConfig(BaseModel):
             raise ValueError("Percentiles de winsorización inválidos.")
         if self.return_type not in {"simple", "log"}:
             raise ValueError("Tipo de retorno inválido.")
-        if self.regime_mode not in {"hard_filter", "weighted_sampling"}:
+        if self.regime_mode not in {
+            "hard_filter", "weighted_sampling", "recency_weighted"
+        }:
             raise ValueError("Modo de régimen inválido.")
         return self
 
@@ -81,6 +83,9 @@ class PortfolioOptimizationConfig(BaseModel):
     minimum_probability_beating_benchmark: float | None = Field(
         default=None, ge=0, le=1
     )
+    maximum_concentration: float | None = Field(default=None, gt=0, le=1)
+    minimum_liquidity: float | None = Field(default=None, ge=0)
+    excluded_symbols: list[str] = Field(default_factory=list)
     diversification_penalty: float = Field(default=0, ge=0)
     concentration_penalty: float = Field(default=0, ge=0)
     turnover_penalty: float = Field(default=0, ge=0)

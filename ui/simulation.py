@@ -77,6 +77,19 @@ def render_optimization(session: Session, benchmark_symbol: str) -> None:
     st.warning(DISCLAIMER)
     available = _symbols(session, benchmark_symbol)
     universe = st.multiselect("Universo", available, default=available[:10])
+    objective = st.selectbox(
+        "Objetivo",
+        [
+            "robust_competition_score",
+            "expected_return",
+            "median_return",
+            "probability_positive",
+            "probability_beating_benchmark",
+            "return_to_expected_shortfall",
+            "return_to_var",
+            "aqs_weighted_probability",
+        ],
+    )
     candidates = st.select_slider("Candidatos", options=[500, 5_000, 20_000], value=500)
     simulations = st.select_slider(
         "Simulaciones por matriz", options=[500, 2_000, 10_000], value=500
@@ -98,16 +111,30 @@ def render_optimization(session: Session, benchmark_symbol: str) -> None:
                 candidate_count=int(candidates),
                 minimum_symbols=minimum,
                 maximum_symbols=len(universe),
+                objective=objective,
             ),
         )
         st.session_state["optimization_result"] = result
     stored_result = st.session_state.get("optimization_result")
     if stored_result is not None:
         result = cast(OptimizationResult, stored_result)
+        st.caption(
+            f"Objetivo solicitado/utilizado: {result.requested_objective} / "
+            f"{result.used_objective}. Aceptados: {len(result.candidates)}; "
+            f"rechazados: {len(result.rejected_candidates)}."
+        )
         st.dataframe(
             pd.DataFrame([item.model_dump() for item in result.candidates]),
             use_container_width=True,
         )
+        if result.rejected_candidates:
+            with st.expander("Candidatos rechazados y restricciones"):
+                st.dataframe(
+                    pd.DataFrame(
+                        [item.model_dump() for item in result.rejected_candidates]
+                    ),
+                    use_container_width=True,
+                )
 
 
 def render_scenarios(session: Session, benchmark_symbol: str) -> None:

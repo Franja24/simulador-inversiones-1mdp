@@ -77,6 +77,12 @@ class SimulationRepository:
                     "weights": candidate.get("weights", {}),
                 },
             )
+        for candidate in payload.get("rejected_candidates", []):
+            self._detail(
+                optimization_candidates,
+                run_id,
+                {**candidate, "status": "REJECTED"},
+            )
 
     def save_stress_details(self, run_id: str, payload: dict[str, Any]) -> None:
         self._detail(stress_test_results, run_id, payload)

@@ -231,7 +231,11 @@ def test_import_date_outside_challenge_is_invalid(
     portfolio.challenge_start_date = date.today()
     session.commit()
     frame = sample_frame().iloc[:1].copy()
-    frame.loc[0, "transaction_date"] = datetime.now(UTC) - timedelta(days=1)
+    frame.loc[0, "transaction_date"] = datetime.combine(
+        portfolio.challenge_start_date - timedelta(days=1),
+        datetime.min.time(),
+        tzinfo=UTC,
+    )
     preview = ImportService(session).validate(frame, portfolio_id)
     assert preview.errors
     assert preview.simulation_complete is False

@@ -69,7 +69,7 @@ class PortfolioSimulationResult(BaseModel):
     diversification_ratio: float | None
     concentration: float
     expected_drawdown: float
-    probability_rule_violation: float
+    initial_rules_compliant: bool
     risk_contributions: dict[str, float]
     assumptions: list[str]
     warnings: list[str]
@@ -95,6 +95,10 @@ class OptimizationCandidate(BaseModel):
     weights: dict[str, float]
     cash_weight: float
     objective_score: float
+    objective_requested: str = "robust_competition_score"
+    objective_used: str = "robust_competition_score"
+    raw_objective_score: float = 0
+    penalties: dict[str, float] = Field(default_factory=dict)
     expected_return: float
     median_return: float
     probability_positive: float
@@ -102,11 +106,19 @@ class OptimizationCandidate(BaseModel):
     value_at_risk: float
     expected_shortfall: float
     expected_drawdown: float
+    drawdown_p95: float = 0
     concentration: float
     weighted_aqs: float | None = None
     stability_score: float = 0
     fragile: bool = False
     warnings: list[str] = Field(default_factory=list)
+
+
+class RejectedCandidate(BaseModel):
+    candidate_id: str
+    weights: dict[str, float]
+    reasons: list[str]
+    metrics: dict[str, float]
 
 
 class OptimizationResult(BaseModel):
@@ -115,6 +127,9 @@ class OptimizationResult(BaseModel):
     effective_date: date
     objective: str
     candidates: list[OptimizationCandidate]
+    rejected_candidates: list[RejectedCandidate] = Field(default_factory=list)
+    requested_objective: str = "robust_competition_score"
+    used_objective: str = "robust_competition_score"
     configuration: dict[str, object]
     data_signature: str
     warnings: list[str]

@@ -186,7 +186,7 @@ class MonteCarloService:
             diversification_ratio=diversification,
             concentration=concentration,
             expected_drawdown=float(np.mean(expected_drawdowns)),
-            probability_rule_violation=0,
+            initial_rules_compliant=True,
             risk_contributions=risk_contributions,
             assumptions=self.ASSUMPTIONS,
             warnings=list(dict.fromkeys(warnings)),
@@ -248,11 +248,26 @@ class MonteCarloService:
         elif method == "correlated_bootstrap":
             probabilities = None
             if config.regime_conditioning:
-                probabilities = np.linspace(1, 1.5, count)
-                probabilities /= probabilities.sum()
-                warnings.append(
-                    "Régimen aproximado mediante ponderación de observaciones recientes."
-                )
+                labels = MonteCarloService._historical_regime_labels(values[:, -1])
+                current = labels[-1]
+                matching = labels == current
+                if config.regime_mode == "hard_filter" and matching.sum() >= max(
+                    20, config.block_size * 2
+                ):
+                    probabilities = matching.astype(float)
+                    probabilities /= probabilities.sum()
+                elif config.regime_mode == "weighted_sampling":
+                    probabilities = np.where(matching, 3.0, 1.0)
+                    probabilities /= probabilities.sum()
+                else:
+                    probabilities = np.linspace(1, 1.5, count)
+                    probabilities /= probabilities.sum()
+                if config.regime_mode == "hard_filter" and not matching.sum() >= max(
+                    20, config.block_size * 2
+                ):
+                    warnings.append(
+                        "Muestra de régimen insuficiente; fallback a histórico completo."
+                    )
             indices = rng.choice(
                 count, size=(simulations, horizon), replace=True, p=probabilities
             )
@@ -277,20 +292,21 @@ class MonteCarloService:
             if eigenvalues.min() <= 1e-12:
                 covariance += np.eye(assets) * (abs(eigenvalues.min()) + 1e-8)
                 warnings.append("Matriz de covarianza regularizada.")
-            normal = rng.multivariate_normal(
-                mean, covariance, size=(simulations, horizon)
+            centered = rng.multivariate_normal(
+                np.zeros(assets), covariance, size=(simulations, horizon)
             )
             if method == "parametric_student_t":
+                degrees = config.student_t_degrees_freedom
                 scale = np.sqrt(
                     rng.chisquare(
-                        config.student_t_degrees_freedom,
+                        degrees,
                         size=(simulations, horizon, 1),
                     )
-                    / config.student_t_degrees_freedom
+                    / degrees
                 )
-                cube = normal / scale
+                cube = mean + centered / scale * np.sqrt((degrees - 2) / degrees)
             else:
-                cube = normal
+                cube = mean + centered
         return cube, method, warnings
 
     @staticmethod
@@ -300,8 +316,24 @@ class MonteCarloService:
             if config.return_type == "log"
             else np.prod(1 + paths, axis=1) - 1
         )
-        costs = (config.transaction_cost_bps + config.slippage_bps) / 10_000
+        costs = 2 * (
+            config.transaction_cost_bps_per_side
+            + config.slippage_bps_per_side
+        ) / 10_000
         return cast(np.ndarray, np.maximum(-1, terminal - costs))
+
+    @staticmethod
+    def _historical_regime_labels(benchmark_returns: np.ndarray) -> np.ndarray:
+        prices = pd.Series(np.cumprod(1 + benchmark_returns), dtype=float)
+        sma20 = prices.rolling(20, min_periods=5).mean()
+        sma50 = prices.rolling(50, min_periods=10).mean()
+        slope = sma20.diff(5)
+        labels = np.full(len(prices), "SIDEWAYS", dtype=object)
+        bullish = (prices > sma20) & (sma20 > sma50) & (slope > 0)
+        bearish = (prices < sma20) & (sma20 < sma50) & (slope < 0)
+        labels[bullish.fillna(False).to_numpy()] = "BULLISH"
+        labels[bearish.fillna(False).to_numpy()] = "BEARISH"
+        return labels
 
     @classmethod
     def _summarize(
